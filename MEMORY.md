@@ -22,17 +22,18 @@ DO NOT delete historical context if it is still relevant. Compress older complet
 
 **Next Steps (W1 — Foundation):**
 1. ✅ Repo cloned and synced locally (done 2026-05-09)
-2. ⏳ Bootstrap monorepo with the 5 sub-packages per `TechDesign-Apis-MVP.md §3 Step 3`:
-   - `packages/program` (Anchor, from `solana-developers/program-examples` escrow)
-   - `packages/web` (Next.js via `pnpm create solana-dapp@latest`)
-   - `packages/apis-provider` (Tauri via `cargo create-tauri-app --template react-ts`)
-   - `packages/worker` (Python venv + `diffusers` stub)
-   - `packages/mcp` (Node + Hono + `@modelcontextprotocol/sdk` skeleton)
-3. ⏳ Verify "Hello World" pipeline: each package starts cleanly (`pnpm dev`, `anchor build && anchor test`, `pnpm tauri dev`, `python -c 'import torch'`, `node packages/mcp/index.ts`)
-4. ⏳ Smart contract v0.1: just `register_provider` + `create_job` + emit events on devnet
-5. ⏳ Web app v0.1: connect Phantom + 1 page submitting a fake job
-6. ⏳ Worker v0.1: Python script that subscribes to Solana program events and echoes a fake result
-7. ⏳ **Sun W1 checkpoint:** I can submit a fake job from the web app, see the tx on Solana devnet explorer, and the worker logs an event reception
+2. ✅ Bootstrap monorepo with 5 sub-packages (done 2026-05-09)
+   - `packages/program` — escrow tutorial copied from `solana-developers/program-examples`, Anchor 1.0 compatible
+   - `packages/web` — `kit/nextjs` template via `create-solana-dapp` (uses `@solana/kit`, NOT legacy web3.js)
+   - `packages/apis-provider` — Tauri 2.x react-ts template, identifier `xyz.apis.provider`
+   - `packages/worker` — Python venv with anchorpy 0.21, solders 0.26, solana 0.36, Pillow, imagehash. PyTorch deferred to W2 (huge install, only needed when running real Flux).
+   - `packages/mcp` — Node + TypeScript + Hono + `@modelcontextprotocol/sdk` + x402 + Anthropic SDK
+3. ✅ Workspace wiring done (`pnpm-workspace.yaml`, root `package.json` with cross-package scripts)
+4. ✅ Verify Hello World pipeline (done 2026-05-09): cargo check / typecheck / imports all green for all 5 scaffolds
+5. ⏳ Smart contract v0.1: refactor escrow tutorial → Apis-specific `register_provider` + `create_job` instructions + 2 events; deploy to devnet
+6. ⏳ Web app v0.1: connect Phantom + 1 page submitting a fake job through the program
+7. ⏳ Worker v0.1: Python script subscribes to `JobCreated` events via Helius websocket and logs receipt
+8. ⏳ **Sun W1 checkpoint:** submit fake job from web → tx on devnet explorer → worker logs receipt
 
 **Fallback rule (per Tech Design §4):** if Sun W1 checkpoint isn't met, +3 days buffer; if still stuck after that, drop to MVP-minimal (3 features only — F1 + F2 + F3, drop F4 + F5 to stretch).
 
@@ -52,6 +53,9 @@ DO NOT delete historical context if it is still relevant. Compress older complet
 - **2026-05-09** — **Verification = Layer 1 only at hackathon.** Signatures + 5% spot checks via VRF + slashing. No TEE (infeasible on consumer GPUs in 2026), no zkML (infeasible for Stable Diffusion in 2026). TEE premium tier (via Phala Network) deferred to Phase 2. (Research §4)
 - **2026-05-09** — **Cyberpunk Swarm** design direction (pitch black `#000`, Solana green `#14F195`, neon violet `#9945FF`) with subtle hex/swarm motif to differentiate from generic-Solana-DePIN aesthetic. (PRD §7)
 - **2026-05-09** — **W4 hard no-go date.** If Claude can't autonomously buy 1 inference by end of W4, freeze scope and polish what works. No new features past W4 — Weeks 5-6 are exclusively polish, demo video, README. (PRD §10, Tech Design §4)
+- **2026-05-09** — Buyer web app uses **`@solana/kit`** template (`kit/nextjs`), NOT legacy `@solana/web3.js`. Reason: Solana Foundation's official current template; modern signer/RPC primitives; aligns with `solana-dev` skill's "kit-first" guidance. Migration patterns to web3.js available via `@solana/web3-compat` if needed. (Updates `agent_docs/tech_stack.md` indirectly — that doc should be refreshed in W5.)
+- **2026-05-09** — **5 Solana skills installed** (`.agents/skills/`): solana-dev (official bundle of 9 references including Anchor 1.0 migration guide), solana-anchor-claude-skill, helius, pyth, switchboard. Pinned via `skills-lock.json`.
+- **2026-05-09** — **Worth investigating in W4:** `kit-node-solanax402` and `x402-template` and `x402-solana-rust` are official community templates from Solana Foundation. May save days of x402 wiring. (Discovered while listing create-solana-dapp templates.)
 
 ## 🐛 Known Issues & Quirks
 
