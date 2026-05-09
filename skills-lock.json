@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "skills": {
+    "helius": {
+      "source": "sendaifun/skills",
+      "sourceType": "github",
+      "skillPath": "skills/helius/SKILL.md",
+      "computedHash": "434d7cc2307933a733fa52305cf4fe51ac4fe9f025c7099759d340567d77f811"
+    },
+    "pyth": {
+      "source": "sendaifun/skills",
+      "sourceType": "github",
+      "skillPath": "skills/pyth/SKILL.md",
+      "computedHash": "d65469f7d0ece9cdbac3841e48c6a27ab59a571212240d5deaa157bef330ea12"
+    },
+    "solana-anchor-claude-skill": {
+      "source": "quiknode-labs/solana-anchor-claude-skill",
+      "sourceType": "github",
+      "skillPath": "SKILL.md",
+      "computedHash": "90557d194221d17d40d5b5b2c83e0a4341dc0272cce251022be06aa5134d39c3"
+    },
+    "solana-dev": {
+      "source": "solana-foundation/solana-dev-skill",
+      "sourceType": "github",
+      "skillPath": "skill/SKILL.md",
+      "computedHash": "27419a2b51070cdd9c3653c8ba3789ab12cdc09cce1383c4fdedc979cf7d15b6"
+    },
+    "switchboard": {
+      "source": "sendaifun/skills",
+      "sourceType": "github",
+      "skillPath": "skills/switchboard/SKILL.md",
+      "computedHash": "11c369d22137a6542e7116a698c53cbbc5e2a3f459e87ebf1531d148951f0d75"
+    }
+  }
+}
