@@ -1,0 +1,104 @@
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+*.swp
+
+# Node
+node_modules/
+.pnpm-store/
+.pnp.*
+npm-debug.log
+pnpm-debug.log
+yarn-debug.log
+yarn-error.log
+.eslintcache
+.tsbuildinfo
+*.tsbuildinfo
+
+# Next.js
+.next/
+out/
+build/
+dist/
+
+# Vercel
+.vercel/
+
+# Environment
+.env
+.env.local
+.env.*.local
+.env.development
+.env.production
+.env.test
+!.env.example
+
+# Rust / Anchor / Solana
+target/
+**/*.rs.bk
+Cargo.lock.bak
+.anchor/
+test-ledger/
+
+# Wallets / keypairs (NEVER commit)
+*-keypair.json
+keypair.json
+~/.config/solana/
+
+# Tauri
+src-tauri/target/
+src-tauri/Cargo.lock.bak
+**/.tauri/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+.venv/
+venv/
+ENV/
+env/
+.python-version
+
+# Pytest / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage/
+*.cover
+
+# Worker artifacts
+packages/worker/models/
+packages/worker/output/
+packages/worker/.cache/
+
+# Logs
+*.log
+logs/
+
+# CI / build
+*.tar.gz
+*.zip
+*.7z
