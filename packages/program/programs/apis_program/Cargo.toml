@@ -1,12 +1,12 @@
 [package]
-name = "escrow"
+name = "apis_program"
 version = "0.1.0"
-description = "Created with Anchor"
+description = "Apis — permissionless GPU compute marketplace on Solana"
 edition = "2021"
 
 [lib]
 crate-type = ["cdylib", "lib"]
-name = "escrow"
+name = "apis_program"
 
 [features]
 default = []
@@ -20,9 +20,10 @@ custom-heap = []
 custom-panic = []
 
 [dependencies]
-# Anchor 1.0.0-rc.5 — pin to RC until stable release
-anchor-lang = { version = "1.0.0-rc.5", features = ["init-if-needed"]}
-anchor-spl = "1.0.0-rc.5"
+# Anchor 1.0.2 — latest stable per Research §12 (verified 2026-05-09 on crates.io).
+# Note: 1.0.x has breaking changes vs 0.30.x — see .agents/skills/solana-dev/references/anchor/migrating-v0.32-to-v1.md
+anchor-lang = { version = "1.0.2", features = ["init-if-needed"] }
+anchor-spl = "1.0.2"
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("solana"))'] }
