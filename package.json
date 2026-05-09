@@ -1,0 +1,25 @@
+{
+  "name": "apis-monorepo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Apis — decentralized GPU compute marketplace on Solana for AI agents and developers",
+  "license": "Apache-2.0",
+  "scripts": {
+    "lint": "pnpm -r --parallel lint",
+    "typecheck": "pnpm -r --parallel typecheck",
+    "test": "pnpm -r --parallel test",
+    "build": "pnpm -r --parallel build",
+    "web:dev": "pnpm --filter web dev",
+    "mcp:dev": "pnpm --filter @apis/mcp dev",
+    "provider:dev": "pnpm --filter apis-provider tauri dev",
+    "anchor:build": "cd packages/program && anchor build",
+    "anchor:test": "cd packages/program && anchor test",
+    "anchor:deploy:devnet": "cd packages/program && anchor deploy --provider.cluster devnet",
+    "worker:dev": "cd packages/worker && . .venv/bin/activate && python -m apis_worker"
+  },
+  "engines": {
+    "node": ">=22",
+    "pnpm": ">=10"
+  },
+  "packageManager": "pnpm@10.13.1"
+}

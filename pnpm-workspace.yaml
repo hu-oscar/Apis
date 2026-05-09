@@ -1,0 +1,7 @@
+packages:
+  - 'packages/web'
+  - 'packages/apis-provider'
+  - 'packages/mcp'
+# Excluded from pnpm workspaces:
+# - packages/program — Anchor manages its own JS deps (uses package.json + pnpm-lock.yaml internally)
+# - packages/worker — Python (managed by venv + pip, not pnpm)
