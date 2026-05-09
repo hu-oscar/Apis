@@ -143,7 +143,7 @@ These rules apply to **Claude Code** (the only AI tool used for this project per
 - ❌ Do NOT hardcode private keys, RPC URLs with API keys, or any secret in source — use `.env*` (gitignored)
 - ❌ Do NOT write code that uses a buyer's prompt for anything other than the inference (no prompt logging beyond strict need)
 - ❌ Do NOT introduce GPL/AGPL/SSPL-licensed dependencies — Apis must remain MIT/Apache-license-compatible
-- ❌ Do NOT push to `main` without CI passing
+- ❌ Do NOT force-push to `main` (regular fast-forward push direct to `main` is the active workflow per Workflow Discipline above)
 - ❌ Do NOT promise TEE on consumer GPUs in code comments or docs (it's infeasible in 2026; positioning is "cryptoeconomic security tier 1")
 
 ## Engineering Constraints (Anti-Vibe Rules)
@@ -175,6 +175,8 @@ These rules apply to **Claude Code** (the only AI tool used for this project per
 - If verification fails, fix issues before continuing.
 - Update `MEMORY.md` after every milestone or architectural decision.
 - Use `REVIEW-CHECKLIST.md` before declaring a feature complete.
+- **Push directly to `main`** during solo hackathon mode (no feature-branch / PR flow). From worktrees: `git push origin HEAD:main` (fast-forward only). Re-evaluate when test-running CI lands in W5.
+- **Commit messages: conventional, no `Co-Authored-By`.** Subjects use `feat:` / `fix:` / `chore:` / `test:` / `docs:`. Body explains "why," not "what." **Never** append `Co-Authored-By: Claude …` footers — user preference.
 
 ## Reference Documents
 

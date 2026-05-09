@@ -37,6 +37,8 @@
 8. **Communication style:** be concise. State issues briefly and fix them. No filler. Ask **one** specific clarifying question if context is missing.
 9. **Update `MEMORY.md`** after every milestone or non-obvious architectural decision.
 10. **Use `REVIEW-CHECKLIST.md`** before declaring a feature complete.
+11. **Push directly to `main`.** Solo hackathon mode — no feature-branch / PR flow. From worktrees, use `git push origin HEAD:main` (fast-forward only). Re-evaluate this rule once test-running CI lands (W5).
+12. **Commit messages: conventional, no `Co-Authored-By`.** Use `feat:` / `fix:` / `chore:` / `test:` / `docs:` prefixes with a tight subject and a "why-not-what" body. **Do NOT** append `Co-Authored-By: Claude …` footers — user preference.
 
 ### Special rule for the smart contract (`packages/program`)
 
@@ -61,7 +63,7 @@ This is **money-touching code.** Apply this stricter workflow:
 - ❌ Do NOT hardcode private keys, RPC URLs with API keys, or any secret in source — use `.env*` (gitignored).
 - ❌ Do NOT log buyer prompts beyond strict need for retry/dispute (auto-purge after 7 days per privacy commitment).
 - ❌ Do NOT introduce GPL/AGPL/SSPL-licensed dependencies — Apis must remain MIT/Apache-license-compatible.
-- ❌ Do NOT push to `main` without CI passing.
+- ❌ Do NOT force-push to `main` (regular fast-forward push direct to `main` is the active workflow per Core rule 11).
 - ❌ Do NOT promise TEE on consumer GPUs — it is infeasible in 2026 (positioning is "cryptoeconomic security tier 1").
 
 ## Commands
