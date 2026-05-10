@@ -30,6 +30,7 @@ import { ProviderStatus } from "@/app/lib/generated/apis-program/src/generated/t
 import { JobStatus } from "@/app/lib/generated/apis-program/src/generated/types/jobStatus";
 import { explorerAccountUrl } from "@/app/lib/apis";
 import { WORKER_PROVIDER_PDA, formatUsdc } from "@/app/lib/constants";
+import { ApisLogo } from "@/app/components/ui/apis-logo";
 
 type ProviderRow = {
   pda: Address;
@@ -337,7 +338,7 @@ function JobCard({ job }: { job: JobRow }) {
         </Cell>
         <Cell label="Provider">
           <span className="font-mono text-white/70">
-            {knownProvider ? "🐝 Apis worker" : `${job.provider.slice(0, 6)}…${job.provider.slice(-4)}`}
+            {knownProvider ? "apis worker" : `${job.provider.slice(0, 6)}…${job.provider.slice(-4)}`}
           </span>
         </Cell>
         <Cell label="Deadline">
@@ -464,8 +465,8 @@ function FooterStrip({ fetchedAt }: { fetchedAt: number | null }) {
 function Nav() {
   return (
     <nav className="flex items-center justify-between pb-8">
-      <Link href="/" className="flex items-center gap-2 group">
-        <span className="text-2xl">🐝</span>
+      <Link href="/" className="flex items-center gap-2.5 group">
+        <ApisLogo size={26} className="transition group-hover:scale-105" />
         <span className="font-mono text-lg font-bold tracking-tight text-[#FAFAF9] group-hover:text-[#14F195] transition">
           apis
         </span>
