@@ -6,7 +6,12 @@
 // the wallet pubkey, get 10 test USDC dropped into its ATA.
 //
 // Guarded by:
-//   - Rate limit: one drip per pubkey per 24h (KV namespace "faucet").
+//   - **Balance gate** (replaces the 24h KV rate limit): if the
+//     recipient's USDC ATA already holds ≥ FAUCET_AMOUNT, refuse —
+//     they don't need a drip. The recipient can spend it down (e.g.
+//     by submitting jobs) before re-dripping. Slightly weaker than a
+//     hard time limit, but acceptable on a devnet test mint and
+//     removes the only reason we needed an external KV.
 //   - Hardcoded amount + mint — caller can't choose what or how much.
 //   - APIS_DEPLOYER_KEYPAIR env var must be set; without it the route
 //     returns 503 instead of leaking the absence of mint authority.
@@ -33,7 +38,6 @@ import {
 } from "@solana/kit";
 import { getMintToInstruction } from "@solana-program/token";
 import { getCreateAssociatedTokenIdempotentInstructionAsync } from "@solana-program/token";
-import { kvGet, kvSet } from "@/app/lib/kv";
 
 export const runtime = "nodejs";
 
@@ -48,7 +52,6 @@ const ASSOCIATED_TOKEN_PROGRAM: Address =
   "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL" as Address;
 
 const FAUCET_AMOUNT_BASE_UNITS = 10_000_000n; // 10 test USDC (6 decimals)
-const COOLDOWN_SECONDS = 60 * 60 * 24; // 24h
 
 type Body = { pubkey: string };
 
@@ -88,15 +91,25 @@ export async function POST(request: Request): Promise<Response> {
   }
   const recipient = body.pubkey as Address;
 
-  // Rate-limit: one drip per pubkey per 24h.
-  const lastDrip = await kvGet<{ at: number }>("faucet", recipient);
-  if (lastDrip != null) {
-    const ageSec = Math.round((Date.now() - lastDrip.at) / 1000);
-    const remaining = Math.max(COOLDOWN_SECONDS - ageSec, 0);
+  // Balance gate: if the recipient already holds enough test USDC, refuse.
+  // Cheaper than an external KV rate limit, and self-paced: spend before
+  // re-dripping. We probe getTokenAccountBalance and treat any error
+  // (e.g. ATA doesn't exist) as "balance == 0" → drip allowed.
+  const ata = await findAta(recipient, USDC_MINT);
+  const rpc = createSolanaRpc(RPC_URL);
+  let priorBalance = 0n;
+  try {
+    const resp = await rpc.getTokenAccountBalance(ata).send();
+    priorBalance = BigInt(resp.value.amount);
+  } catch {
+    priorBalance = 0n;
+  }
+  if (priorBalance >= FAUCET_AMOUNT_BASE_UNITS) {
     return NextResponse.json(
       {
-        error: "Rate limit: one drip per wallet per 24h",
-        retryAfterSeconds: remaining,
+        error:
+          "You already have enough test USDC. Spend some by submitting a job, then come back.",
+        currentBalanceBaseUnits: priorBalance.toString(),
       },
       { status: 429 },
     );
@@ -118,9 +131,6 @@ export async function POST(request: Request): Promise<Response> {
   }
 
   try {
-    const ata = await findAta(recipient, USDC_MINT);
-    const rpc = createSolanaRpc(RPC_URL);
-
     const ataIx = await getCreateAssociatedTokenIdempotentInstructionAsync({
       payer: deployer,
       owner: recipient,
@@ -146,11 +156,6 @@ export async function POST(request: Request): Promise<Response> {
     await rpc
       .sendTransaction(wire, { encoding: "base64", preflightCommitment: "confirmed" })
       .send();
-
-    // Best-effort: mark the drip in KV. If the on-chain tx already
-    // landed but KV write failed, the user might double-drip — fine,
-    // it's devnet test USDC.
-    await kvSet("faucet", recipient, { at: Date.now(), signature });
 
     return NextResponse.json({
       ok: true,
