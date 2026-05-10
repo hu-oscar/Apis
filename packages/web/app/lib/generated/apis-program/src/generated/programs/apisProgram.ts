@@ -33,29 +33,53 @@ import {
   type SelfPlanAndSendFunctions,
 } from "@solana/program-client-core";
 import {
+  getGlobalConfigCodec,
   getJobCodec,
   getProviderCodec,
+  type GlobalConfig,
+  type GlobalConfigArgs,
   type Job,
   type JobArgs,
   type Provider,
   type ProviderArgs,
 } from "../accounts";
 import {
+  getAcceptJobInstructionAsync,
+  getCancelJobInstructionAsync,
+  getConfirmCompletionInstructionAsync,
   getCreateJobInstructionAsync,
+  getInitializeConfigInstructionAsync,
   getRegisterProviderInstructionAsync,
+  getSubmitCompletionInstructionAsync,
+  parseAcceptJobInstruction,
+  parseCancelJobInstruction,
+  parseConfirmCompletionInstruction,
   parseCreateJobInstruction,
+  parseInitializeConfigInstruction,
   parseRegisterProviderInstruction,
+  parseSubmitCompletionInstruction,
+  type AcceptJobAsyncInput,
+  type CancelJobAsyncInput,
+  type ConfirmCompletionAsyncInput,
   type CreateJobAsyncInput,
+  type InitializeConfigAsyncInput,
+  type ParsedAcceptJobInstruction,
+  type ParsedCancelJobInstruction,
+  type ParsedConfirmCompletionInstruction,
   type ParsedCreateJobInstruction,
+  type ParsedInitializeConfigInstruction,
   type ParsedRegisterProviderInstruction,
+  type ParsedSubmitCompletionInstruction,
   type RegisterProviderAsyncInput,
+  type SubmitCompletionAsyncInput,
 } from "../instructions";
-import { findJobPda, findProviderPda } from "../pdas";
+import { findConfigPda, findJobPda, findProviderPda } from "../pdas";
 
 export const APIS_PROGRAM_PROGRAM_ADDRESS =
   "2qe8YXciSpony5vjwxZAYJZ7WfRzSHKRdRzSiH868mhf" as Address<"2qe8YXciSpony5vjwxZAYJZ7WfRzSHKRdRzSiH868mhf">;
 
 export enum ApisProgramAccount {
+  GlobalConfig,
   Job,
   Provider,
 }
@@ -64,6 +88,17 @@ export function identifyApisProgramAccount(
   account: { data: ReadonlyUint8Array } | ReadonlyUint8Array
 ): ApisProgramAccount {
   const data = "data" in account ? account.data : account;
+  if (
+    containsBytes(
+      data,
+      fixEncoderSize(getBytesEncoder(), 8).encode(
+        new Uint8Array([149, 8, 156, 202, 160, 252, 176, 217])
+      ),
+      0
+    )
+  ) {
+    return ApisProgramAccount.GlobalConfig;
+  }
   if (
     containsBytes(
       data,
@@ -93,14 +128,52 @@ export function identifyApisProgramAccount(
 }
 
 export enum ApisProgramInstruction {
+  AcceptJob,
+  CancelJob,
+  ConfirmCompletion,
   CreateJob,
+  InitializeConfig,
   RegisterProvider,
+  SubmitCompletion,
 }
 
 export function identifyApisProgramInstruction(
   instruction: { data: ReadonlyUint8Array } | ReadonlyUint8Array
 ): ApisProgramInstruction {
   const data = "data" in instruction ? instruction.data : instruction;
+  if (
+    containsBytes(
+      data,
+      fixEncoderSize(getBytesEncoder(), 8).encode(
+        new Uint8Array([43, 201, 124, 1, 19, 189, 96, 10])
+      ),
+      0
+    )
+  ) {
+    return ApisProgramInstruction.AcceptJob;
+  }
+  if (
+    containsBytes(
+      data,
+      fixEncoderSize(getBytesEncoder(), 8).encode(
+        new Uint8Array([126, 241, 155, 241, 50, 236, 83, 118])
+      ),
+      0
+    )
+  ) {
+    return ApisProgramInstruction.CancelJob;
+  }
+  if (
+    containsBytes(
+      data,
+      fixEncoderSize(getBytesEncoder(), 8).encode(
+        new Uint8Array([187, 31, 6, 48, 117, 161, 2, 243])
+      ),
+      0
+    )
+  ) {
+    return ApisProgramInstruction.ConfirmCompletion;
+  }
   if (
     containsBytes(
       data,
@@ -116,12 +189,34 @@ export function identifyApisProgramInstruction(
     containsBytes(
       data,
       fixEncoderSize(getBytesEncoder(), 8).encode(
+        new Uint8Array([208, 127, 21, 1, 194, 190, 196, 70])
+      ),
+      0
+    )
+  ) {
+    return ApisProgramInstruction.InitializeConfig;
+  }
+  if (
+    containsBytes(
+      data,
+      fixEncoderSize(getBytesEncoder(), 8).encode(
         new Uint8Array([254, 209, 54, 184, 46, 197, 109, 78])
       ),
       0
     )
   ) {
     return ApisProgramInstruction.RegisterProvider;
+  }
+  if (
+    containsBytes(
+      data,
+      fixEncoderSize(getBytesEncoder(), 8).encode(
+        new Uint8Array([155, 236, 211, 88, 53, 120, 74, 196])
+      ),
+      0
+    )
+  ) {
+    return ApisProgramInstruction.SubmitCompletion;
   }
   throw new SolanaError(
     SOLANA_ERROR__PROGRAM_CLIENTS__FAILED_TO_IDENTIFY_INSTRUCTION,
@@ -133,17 +228,53 @@ export type ParsedApisProgramInstruction<
   TProgram extends string = "2qe8YXciSpony5vjwxZAYJZ7WfRzSHKRdRzSiH868mhf",
 > =
   | ({
+      instructionType: ApisProgramInstruction.AcceptJob;
+    } & ParsedAcceptJobInstruction<TProgram>)
+  | ({
+      instructionType: ApisProgramInstruction.CancelJob;
+    } & ParsedCancelJobInstruction<TProgram>)
+  | ({
+      instructionType: ApisProgramInstruction.ConfirmCompletion;
+    } & ParsedConfirmCompletionInstruction<TProgram>)
+  | ({
       instructionType: ApisProgramInstruction.CreateJob;
     } & ParsedCreateJobInstruction<TProgram>)
   | ({
+      instructionType: ApisProgramInstruction.InitializeConfig;
+    } & ParsedInitializeConfigInstruction<TProgram>)
+  | ({
       instructionType: ApisProgramInstruction.RegisterProvider;
-    } & ParsedRegisterProviderInstruction<TProgram>);
+    } & ParsedRegisterProviderInstruction<TProgram>)
+  | ({
+      instructionType: ApisProgramInstruction.SubmitCompletion;
+    } & ParsedSubmitCompletionInstruction<TProgram>);
 
 export function parseApisProgramInstruction<TProgram extends string>(
   instruction: Instruction<TProgram> & InstructionWithData<ReadonlyUint8Array>
 ): ParsedApisProgramInstruction<TProgram> {
   const instructionType = identifyApisProgramInstruction(instruction);
   switch (instructionType) {
+    case ApisProgramInstruction.AcceptJob: {
+      assertIsInstructionWithAccounts(instruction);
+      return {
+        instructionType: ApisProgramInstruction.AcceptJob,
+        ...parseAcceptJobInstruction(instruction),
+      };
+    }
+    case ApisProgramInstruction.CancelJob: {
+      assertIsInstructionWithAccounts(instruction);
+      return {
+        instructionType: ApisProgramInstruction.CancelJob,
+        ...parseCancelJobInstruction(instruction),
+      };
+    }
+    case ApisProgramInstruction.ConfirmCompletion: {
+      assertIsInstructionWithAccounts(instruction);
+      return {
+        instructionType: ApisProgramInstruction.ConfirmCompletion,
+        ...parseConfirmCompletionInstruction(instruction),
+      };
+    }
     case ApisProgramInstruction.CreateJob: {
       assertIsInstructionWithAccounts(instruction);
       return {
@@ -151,11 +282,25 @@ export function parseApisProgramInstruction<TProgram extends string>(
         ...parseCreateJobInstruction(instruction),
       };
     }
+    case ApisProgramInstruction.InitializeConfig: {
+      assertIsInstructionWithAccounts(instruction);
+      return {
+        instructionType: ApisProgramInstruction.InitializeConfig,
+        ...parseInitializeConfigInstruction(instruction),
+      };
+    }
     case ApisProgramInstruction.RegisterProvider: {
       assertIsInstructionWithAccounts(instruction);
       return {
         instructionType: ApisProgramInstruction.RegisterProvider,
         ...parseRegisterProviderInstruction(instruction),
+      };
+    }
+    case ApisProgramInstruction.SubmitCompletion: {
+      assertIsInstructionWithAccounts(instruction);
+      return {
+        instructionType: ApisProgramInstruction.SubmitCompletion,
+        ...parseSubmitCompletionInstruction(instruction),
       };
     }
     default:
@@ -176,25 +321,48 @@ export type ApisProgramPlugin = {
 };
 
 export type ApisProgramPluginAccounts = {
+  globalConfig: ReturnType<typeof getGlobalConfigCodec> &
+    SelfFetchFunctions<GlobalConfigArgs, GlobalConfig>;
   job: ReturnType<typeof getJobCodec> & SelfFetchFunctions<JobArgs, Job>;
   provider: ReturnType<typeof getProviderCodec> &
     SelfFetchFunctions<ProviderArgs, Provider>;
 };
 
 export type ApisProgramPluginInstructions = {
+  acceptJob: (
+    input: AcceptJobAsyncInput
+  ) => ReturnType<typeof getAcceptJobInstructionAsync> &
+    SelfPlanAndSendFunctions;
+  cancelJob: (
+    input: CancelJobAsyncInput
+  ) => ReturnType<typeof getCancelJobInstructionAsync> &
+    SelfPlanAndSendFunctions;
+  confirmCompletion: (
+    input: ConfirmCompletionAsyncInput
+  ) => ReturnType<typeof getConfirmCompletionInstructionAsync> &
+    SelfPlanAndSendFunctions;
   createJob: (
     input: CreateJobAsyncInput
   ) => ReturnType<typeof getCreateJobInstructionAsync> &
+    SelfPlanAndSendFunctions;
+  initializeConfig: (
+    input: InitializeConfigAsyncInput
+  ) => ReturnType<typeof getInitializeConfigInstructionAsync> &
     SelfPlanAndSendFunctions;
   registerProvider: (
     input: RegisterProviderAsyncInput
   ) => ReturnType<typeof getRegisterProviderInstructionAsync> &
     SelfPlanAndSendFunctions;
+  submitCompletion: (
+    input: SubmitCompletionAsyncInput
+  ) => ReturnType<typeof getSubmitCompletionInstructionAsync> &
+    SelfPlanAndSendFunctions;
 };
 
 export type ApisProgramPluginPdas = {
-  job: typeof findJobPda;
   provider: typeof findProviderPda;
+  config: typeof findConfigPda;
+  job: typeof findJobPda;
 };
 
 export type ApisProgramPluginRequirements = ClientWithRpc<
@@ -210,22 +378,52 @@ export function apisProgramProgram() {
     return extendClient(client, {
       apisProgram: <ApisProgramPlugin>{
         accounts: {
+          globalConfig: addSelfFetchFunctions(client, getGlobalConfigCodec()),
           job: addSelfFetchFunctions(client, getJobCodec()),
           provider: addSelfFetchFunctions(client, getProviderCodec()),
         },
         instructions: {
+          acceptJob: (input) =>
+            addSelfPlanAndSendFunctions(
+              client,
+              getAcceptJobInstructionAsync(input)
+            ),
+          cancelJob: (input) =>
+            addSelfPlanAndSendFunctions(
+              client,
+              getCancelJobInstructionAsync(input)
+            ),
+          confirmCompletion: (input) =>
+            addSelfPlanAndSendFunctions(
+              client,
+              getConfirmCompletionInstructionAsync(input)
+            ),
           createJob: (input) =>
             addSelfPlanAndSendFunctions(
               client,
               getCreateJobInstructionAsync(input)
+            ),
+          initializeConfig: (input) =>
+            addSelfPlanAndSendFunctions(
+              client,
+              getInitializeConfigInstructionAsync(input)
             ),
           registerProvider: (input) =>
             addSelfPlanAndSendFunctions(
               client,
               getRegisterProviderInstructionAsync(input)
             ),
+          submitCompletion: (input) =>
+            addSelfPlanAndSendFunctions(
+              client,
+              getSubmitCompletionInstructionAsync(input)
+            ),
         },
-        pdas: { job: findJobPda, provider: findProviderPda },
+        pdas: {
+          provider: findProviderPda,
+          config: findConfigPda,
+          job: findJobPda,
+        },
       },
     });
   };

@@ -19,6 +19,7 @@ from .config import APIS_PROGRAM_ID, RPC_WS_URL
 from .decoder import EventDecoder, load_event_decoders, try_decode_event
 from .inference import run_inference
 from .ipfs import public_url, upload_png
+from .result_channel import store_result
 from .spec_channel import lookup_spec
 from .submit import accept_job, submit_completion
 from .wallet import load_worker_keypair
@@ -165,6 +166,13 @@ async def _process_job(fields: dict, worker_keypair: Keypair) -> None:
         log.info("│  [3/4] uploading to IPFS …")
         cid = await upload_png(png_bytes, name=f"job-{str(job_pda)[:8]}.png")
         log.info("│       result at %s", public_url(cid))
+
+        # 3a. Publish (cid, proof_hash) to the result side-channel so
+        # the buyer's /job/[id] page can render the image once it polls.
+        # File written before submit_completion confirms — the page
+        # waits on Job.status == Completed anyway, so the result is
+        # ready by the time it's needed.
+        store_result(str(job_pda), cid, proof_hash)
 
         # 4. submit_completion: Started → Completed
         log.info("│  [4/4] submit_completion …")

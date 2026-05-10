@@ -24,22 +24,78 @@ export const APIS_PROGRAM_ERROR__SPEC_HASH_ZERO = 0x1772; // 6002
 export const APIS_PROGRAM_ERROR__PROVIDER_NOT_ACTIVE = 0x1773; // 6003
 /** InvalidDeadline: deadline must be in the future */
 export const APIS_PROGRAM_ERROR__INVALID_DEADLINE = 0x1774; // 6004
+/** FeeBpsTooHigh: fee_bps must be <= 10000 (100%) */
+export const APIS_PROGRAM_ERROR__FEE_BPS_TOO_HIGH = 0x1775; // 6005
+/** WrongMint: usdc_mint must match config.usdc_mint */
+export const APIS_PROGRAM_ERROR__WRONG_MINT = 0x1776; // 6006
+/** ConfigPaused: config is paused; new jobs are rejected */
+export const APIS_PROGRAM_ERROR__CONFIG_PAUSED = 0x1777; // 6007
+/** ZeroPrice: price_lamports_usdc must be > 0 */
+export const APIS_PROGRAM_ERROR__ZERO_PRICE = 0x1778; // 6008
+/** VaultAmountMismatch: escrow vault amount does not match expected price */
+export const APIS_PROGRAM_ERROR__VAULT_AMOUNT_MISMATCH = 0x1779; // 6009
+/** JobNotFunded: job is not in Funded status */
+export const APIS_PROGRAM_ERROR__JOB_NOT_FUNDED = 0x177a; // 6010
+/** WrongProvider: job is not assigned to this provider */
+export const APIS_PROGRAM_ERROR__WRONG_PROVIDER = 0x177b; // 6011
+/** WrongProviderAuthority: signer is not the provider's authority */
+export const APIS_PROGRAM_ERROR__WRONG_PROVIDER_AUTHORITY = 0x177c; // 6012
+/** JobNotStarted: job is not in Started status */
+export const APIS_PROGRAM_ERROR__JOB_NOT_STARTED = 0x177d; // 6013
+/** ProofHashZero: proof_hash must not be zero */
+export const APIS_PROGRAM_ERROR__PROOF_HASH_ZERO = 0x177e; // 6014
+/** WrongBuyer: signer is not the job's buyer */
+export const APIS_PROGRAM_ERROR__WRONG_BUYER = 0x177f; // 6015
+/** JobNotCompleted: job is not in Completed status */
+export const APIS_PROGRAM_ERROR__JOB_NOT_COMPLETED = 0x1780; // 6016
+/** WrongTreasury: treasury account does not match config.treasury */
+export const APIS_PROGRAM_ERROR__WRONG_TREASURY = 0x1781; // 6017
+/** ArithmeticOverflow: arithmetic overflow in fee calculation */
+export const APIS_PROGRAM_ERROR__ARITHMETIC_OVERFLOW = 0x1782; // 6018
 
 export type ApisProgramError =
+  | typeof APIS_PROGRAM_ERROR__ARITHMETIC_OVERFLOW
+  | typeof APIS_PROGRAM_ERROR__CONFIG_PAUSED
   | typeof APIS_PROGRAM_ERROR__ENDPOINT_URI_HASH_ZERO
+  | typeof APIS_PROGRAM_ERROR__FEE_BPS_TOO_HIGH
   | typeof APIS_PROGRAM_ERROR__GPU_SPECS_HASH_ZERO
   | typeof APIS_PROGRAM_ERROR__INVALID_DEADLINE
+  | typeof APIS_PROGRAM_ERROR__JOB_NOT_COMPLETED
+  | typeof APIS_PROGRAM_ERROR__JOB_NOT_FUNDED
+  | typeof APIS_PROGRAM_ERROR__JOB_NOT_STARTED
+  | typeof APIS_PROGRAM_ERROR__PROOF_HASH_ZERO
   | typeof APIS_PROGRAM_ERROR__PROVIDER_NOT_ACTIVE
-  | typeof APIS_PROGRAM_ERROR__SPEC_HASH_ZERO;
+  | typeof APIS_PROGRAM_ERROR__SPEC_HASH_ZERO
+  | typeof APIS_PROGRAM_ERROR__VAULT_AMOUNT_MISMATCH
+  | typeof APIS_PROGRAM_ERROR__WRONG_BUYER
+  | typeof APIS_PROGRAM_ERROR__WRONG_MINT
+  | typeof APIS_PROGRAM_ERROR__WRONG_PROVIDER
+  | typeof APIS_PROGRAM_ERROR__WRONG_PROVIDER_AUTHORITY
+  | typeof APIS_PROGRAM_ERROR__WRONG_TREASURY
+  | typeof APIS_PROGRAM_ERROR__ZERO_PRICE;
 
 let apisProgramErrorMessages: Record<ApisProgramError, string> | undefined;
 if (process.env["NODE_ENV"] !== "production") {
   apisProgramErrorMessages = {
+    [APIS_PROGRAM_ERROR__ARITHMETIC_OVERFLOW]: `arithmetic overflow in fee calculation`,
+    [APIS_PROGRAM_ERROR__CONFIG_PAUSED]: `config is paused; new jobs are rejected`,
     [APIS_PROGRAM_ERROR__ENDPOINT_URI_HASH_ZERO]: `endpoint_uri_hash must not be zero`,
+    [APIS_PROGRAM_ERROR__FEE_BPS_TOO_HIGH]: `fee_bps must be <= 10000 (100%)`,
     [APIS_PROGRAM_ERROR__GPU_SPECS_HASH_ZERO]: `gpu_specs_hash must not be zero`,
     [APIS_PROGRAM_ERROR__INVALID_DEADLINE]: `deadline must be in the future`,
+    [APIS_PROGRAM_ERROR__JOB_NOT_COMPLETED]: `job is not in Completed status`,
+    [APIS_PROGRAM_ERROR__JOB_NOT_FUNDED]: `job is not in Funded status`,
+    [APIS_PROGRAM_ERROR__JOB_NOT_STARTED]: `job is not in Started status`,
+    [APIS_PROGRAM_ERROR__PROOF_HASH_ZERO]: `proof_hash must not be zero`,
     [APIS_PROGRAM_ERROR__PROVIDER_NOT_ACTIVE]: `provider is not Active and cannot accept new jobs`,
     [APIS_PROGRAM_ERROR__SPEC_HASH_ZERO]: `spec_hash must not be zero`,
+    [APIS_PROGRAM_ERROR__VAULT_AMOUNT_MISMATCH]: `escrow vault amount does not match expected price`,
+    [APIS_PROGRAM_ERROR__WRONG_BUYER]: `signer is not the job's buyer`,
+    [APIS_PROGRAM_ERROR__WRONG_MINT]: `usdc_mint must match config.usdc_mint`,
+    [APIS_PROGRAM_ERROR__WRONG_PROVIDER]: `job is not assigned to this provider`,
+    [APIS_PROGRAM_ERROR__WRONG_PROVIDER_AUTHORITY]: `signer is not the provider's authority`,
+    [APIS_PROGRAM_ERROR__WRONG_TREASURY]: `treasury account does not match config.treasury`,
+    [APIS_PROGRAM_ERROR__ZERO_PRICE]: `price_lamports_usdc must be > 0`,
   };
 }
 

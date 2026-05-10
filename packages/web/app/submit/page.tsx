@@ -1,20 +1,24 @@
 "use client";
 
-// Apis W1 fake-job submit page.
+// Apis W2 buyer submit page.
 //
 // Flow:
 //   1. Read wallet from useWalletConnection (already wired in app/components/providers).
-//   2. Derive the buyer's Provider PDA. Fetch its account; if missing, show
-//      "Register as provider"; otherwise show the job-submit form.
-//   3. register_provider — single click, stub gpu/endpoint hashes (W1 demo only).
-//   4. create_job — sha256(prompt) → on-chain spec_hash; 600s deadline; price=0.
-//   5. After each tx, surface the signature with a Solana Explorer link.
+//   2. Derive the buyer's USDC ATA against the test mint and read the
+//      balance — gate "Submit" on having ≥ price USDC.
+//   3. POST the spec to /api/spec so the worker can read the prompt
+//      from /tmp/apis_specs/{spec_hash}.json once JobCreated fires.
+//   4. Build + sign create_job; redirect to /job/[jobPda].
 //
-// W1 has no USDC escrow — all transactions only pay rent + tx fees from the
-// connected Phantom wallet.
+// The worker (running locally, registered as WORKER_PROVIDER_PDA) picks
+// up JobCreated events filtered to itself, accepts the job, runs Flux
+// Schnell, uploads to IPFS, and submits completion. The /job/[id] page
+// polls the on-chain Job + the worker's result side-channel until the
+// image is ready.
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   useSendTransaction,
@@ -25,149 +29,193 @@ import {
 import { createWalletTransactionSigner } from "@solana/client";
 import type { Address, TransactionSigner } from "@solana/kit";
 
+import { findJobPda, getCreateJobInstructionAsync } from "@/app/lib/apis-program";
 import {
-  fetchMaybeProvider,
-  findJobPda,
-  findProviderPda,
-  getCreateJobInstructionAsync,
-  getRegisterProviderInstructionAsync,
-} from "@/app/lib/apis-program";
-import { explorerAccountUrl, explorerTxUrl, randomJobId, sha256 } from "@/app/lib/apis";
+  explorerAccountUrl,
+  findAssociatedTokenAddress,
+  randomJobId,
+  sha256,
+  tryReadTokenBalance,
+} from "@/app/lib/apis";
+import {
+  DEFAULT_DEADLINE_SECS,
+  USDC_DECIMALS,
+  USDC_MINT,
+  WORKER_PROVIDER_PDA,
+  formatUsdc,
+} from "@/app/lib/constants";
 
-type ProviderState =
-  | { kind: "loading" }
-  | { kind: "no-wallet" }
-  | { kind: "missing"; pda: Address }
-  | { kind: "registered"; pda: Address };
+// W2 spec passed to the worker via the file-based side-channel. Keys must
+// match what apis_worker/inference.py expects.
+type Spec = {
+  prompt: string;
+  model: "flux-schnell";
+  steps: number;
+  width: number;
+  height: number;
+  seed: number;
+};
 
-type FetchResult = { authority: Address; pda: Address; exists: boolean };
-
-const DEMO_GPU_SPECS = "Apis demo provider — RTX 4080 24GB / CUDA 12.4";
-const DEMO_ENDPOINT_URI = "wss://demo.local:8787";
 const DEFAULT_PROMPT =
   "An astronaut riding a horse on Mars, photorealistic, golden hour";
-const DEADLINE_SECS = BigInt(600);
+
+// Canonical-JSON encode (sorted keys, no whitespace) so the worker hashes
+// the same bytes we did. Mirrors json.dumps(sort_keys=True, separators=…)
+// in apis_worker/spec_channel.py + scripts/test_create_job.py.
+function canonicalJson(obj: unknown): string {
+  if (obj === null || typeof obj !== "object" || Array.isArray(obj)) {
+    return JSON.stringify(obj);
+  }
+  const keys = Object.keys(obj as Record<string, unknown>).sort();
+  const parts = keys.map(
+    (k) => `${JSON.stringify(k)}:${canonicalJson((obj as Record<string, unknown>)[k])}`,
+  );
+  return `{${parts.join(",")}}`;
+}
+
+function bytesToHex(b: Uint8Array): string {
+  return Array.from(b, (n) => n.toString(16).padStart(2, "0")).join("");
+}
 
 export default function SubmitPage() {
+  const router = useRouter();
   const { status: walletStatus } = useWalletConnection();
   const session = useWalletSession();
   const client = useSolanaClient();
   const sendTx = useSendTransaction();
 
-  // Stored fetch result tagged with the wallet that produced it; the
-  // derived `providerState` below treats a stale tag as "loading" so wallet
-  // switches don't briefly render the previous wallet's state.
-  const [fetchResult, setFetchResult] = useState<FetchResult | null>(null);
+  // Form state.
   const [prompt, setPrompt] = useState(DEFAULT_PROMPT);
-  const [busy, setBusy] = useState<string | null>(null);
-  const [registerSig, setRegisterSig] = useState<string | null>(null);
-  const [submittedJob, setSubmittedJob] = useState<
-    { jobPda: Address; signature: string } | null
-  >(null);
-  const [opError, setOpError] = useState<string | null>(null);
+  const [steps, setSteps] = useState(4);
+  const [width, setWidth] = useState(512);
+  const [height, setHeight] = useState(512);
+  const [seed, setSeed] = useState(42);
+  // Price as user-entered USDC string ("1.0"); converted to base units on submit.
+  const [priceUsdc, setPriceUsdc] = useState("1.0");
 
-  // Wrap the connected WalletSession into a kit-style TransactionSigner.
-  // `signer` implements signAndSendTransactions, which is what Codama's
-  // *_InstructionAsync builders + useSendTransaction expect.
+  // Async/derived state.
+  const [busy, setBusy] = useState<string | null>(null);
+  const [opError, setOpError] = useState<string | null>(null);
+  // Tagged with the buyer it was fetched for; if the wallet swaps, the
+  // tag-mismatch makes the derived `balance` go back to "loading" — no
+  // synchronous setState in the effect (React 19 strict pattern).
+  const [balanceFetch, setBalanceFetch] = useState<{
+    forBuyer: Address;
+    amount: bigint;
+  } | null>(null);
+
   const buyerSigner: TransactionSigner | undefined = useMemo(() => {
     if (!session) return undefined;
     return createWalletTransactionSigner(session).signer;
   }, [session]);
   const buyerAddress = session?.account.address;
 
-  // Effect only triggers the async fetch — no synchronous setState (React 19
-  // discourages cascading-render setState in effect bodies). The "loading" /
-  // "no-wallet" / etc. UI state is derived below via useMemo.
+  // Read buyer's USDC balance whenever the wallet changes.
   useEffect(() => {
     if (walletStatus !== "connected" || !buyerAddress) return;
     let cancelled = false;
     (async () => {
-      const [pda] = await findProviderPda({ authority: buyerAddress });
-      const acct = await fetchMaybeProvider(client.runtime.rpc, pda);
+      const ata = await findAssociatedTokenAddress(buyerAddress, USDC_MINT);
+      const bal = await tryReadTokenBalance(client.runtime.rpc, ata);
       if (cancelled) return;
-      setFetchResult({ authority: buyerAddress, pda, exists: acct.exists });
+      setBalanceFetch({
+        forBuyer: buyerAddress,
+        amount: bal ? bal.amount : BigInt(0),
+      });
     })().catch((err) => {
       if (cancelled) return;
-      console.error("Provider PDA fetch failed", err);
-      setOpError(`Failed to read provider state: ${err}`);
+      console.error("Balance fetch failed", err);
+      setBalanceFetch({ forBuyer: buyerAddress, amount: BigInt(0) });
     });
     return () => {
       cancelled = true;
     };
   }, [walletStatus, buyerAddress, client]);
 
-  const providerState = useMemo<ProviderState>(() => {
-    if (walletStatus !== "connected" || !buyerAddress) {
-      return { kind: "no-wallet" };
-    }
-    // Stale tag (from a previous wallet) → treat as still loading.
-    if (!fetchResult || fetchResult.authority !== buyerAddress) {
-      return { kind: "loading" };
-    }
-    return fetchResult.exists
-      ? { kind: "registered", pda: fetchResult.pda }
-      : { kind: "missing", pda: fetchResult.pda };
-  }, [walletStatus, buyerAddress, fetchResult]);
+  // Derived: only show balance if it's for the currently-connected buyer.
+  const balance =
+    balanceFetch && balanceFetch.forBuyer === buyerAddress
+      ? { amount: balanceFetch.amount }
+      : null;
 
-  const handleRegister = async () => {
-    if (!buyerSigner || !buyerAddress) return;
-    setBusy("Registering provider…");
-    setOpError(null);
-    sendTx.reset();
-    try {
-      const [gpuSpecsHash, endpointUriHash] = await Promise.all([
-        sha256(DEMO_GPU_SPECS),
-        sha256(DEMO_ENDPOINT_URI),
-      ]);
-      const ix = await getRegisterProviderInstructionAsync({
-        authority: buyerSigner,
-        gpuSpecsHash,
-        endpointUriHash,
-      });
-      const signature = await sendTx.send({
-        instructions: [ix],
-        feePayer: buyerSigner,
-      });
-      setRegisterSig(signature);
-      const [pda] = await findProviderPda({ authority: buyerAddress });
-      setFetchResult({ authority: buyerAddress, pda, exists: true });
-    } catch (err) {
-      setOpError(`register_provider failed: ${err}`);
-    } finally {
-      setBusy(null);
-    }
-  };
+  const priceLamports = useMemo<bigint | null>(() => {
+    const trimmed = priceUsdc.trim();
+    if (!/^\d+(\.\d{1,6})?$/.test(trimmed)) return null;
+    const [whole, frac = ""] = trimmed.split(".");
+    const fracPadded = (frac + "000000").slice(0, USDC_DECIMALS);
+    return BigInt(whole) * BigInt(10 ** USDC_DECIMALS) + BigInt(fracPadded || 0);
+  }, [priceUsdc]);
 
-  const handleSubmitJob = async () => {
-    if (
-      !buyerSigner ||
-      !buyerAddress ||
-      providerState.kind !== "registered"
-    ) {
-      return;
-    }
-    setBusy("Submitting job…");
+  const insufficient =
+    balance != null &&
+    priceLamports != null &&
+    balance.amount < priceLamports;
+
+  const canSubmit =
+    !!buyerSigner &&
+    walletStatus === "connected" &&
+    !busy &&
+    !sendTx.isSending &&
+    prompt.trim().length > 0 &&
+    priceLamports != null &&
+    priceLamports > BigInt(0) &&
+    !insufficient;
+
+  const handleSubmit = async () => {
+    if (!buyerSigner || !buyerAddress || !priceLamports) return;
+    setBusy("Preparing job…");
     setOpError(null);
     sendTx.reset();
     try {
       const id = randomJobId();
-      const specHash = await sha256(prompt);
+      const spec: Spec = {
+        prompt: prompt.trim(),
+        model: "flux-schnell",
+        steps,
+        width,
+        height,
+        seed,
+      };
+      const specCanonical = canonicalJson(spec);
+      const specHash = await sha256(specCanonical);
+      const specHashHex = bytesToHex(specHash);
+
+      // 1. Stash the spec server-side BEFORE the on-chain tx — the
+      // worker may pick up JobCreated within ~1 second of confirmation
+      // and need to read the prompt right away.
+      setBusy("Storing spec…");
+      const r = await fetch("/api/spec", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ specHash: specHashHex, spec }),
+      });
+      if (!r.ok) {
+        const body = (await r.json().catch(() => ({}))) as { error?: string };
+        throw new Error(body.error ?? `spec POST failed (${r.status})`);
+      }
+
+      // 2. Build + sign + send create_job.
       const [jobPda] = await findJobPda({ buyer: buyerAddress, id });
+      setBusy(`Submitting create_job (${formatUsdc(priceLamports)} USDC)…`);
       const ix = await getCreateJobInstructionAsync({
         buyer: buyerSigner,
-        provider: providerState.pda,
+        provider: WORKER_PROVIDER_PDA,
+        usdcMint: USDC_MINT,
         id,
         specHash,
-        deadlineOffsetSecs: DEADLINE_SECS,
+        deadlineOffsetSecs: DEFAULT_DEADLINE_SECS,
+        priceLamportsUsdc: priceLamports,
       });
-      const signature = await sendTx.send({
+      await sendTx.send({
         instructions: [ix],
         feePayer: buyerSigner,
       });
-      setSubmittedJob({ jobPda, signature });
+
+      // 3. Off to the result page — it'll subscribe + render when the
+      // worker finishes.
+      router.push(`/job/${jobPda}`);
     } catch (err) {
-      setOpError(`create_job failed: ${err}`);
-    } finally {
+      setOpError(`Submit failed: ${err instanceof Error ? err.message : err}`);
       setBusy(null);
     }
   };
@@ -179,72 +227,39 @@ export default function SubmitPage() {
       <div className="relative z-10 mx-auto flex min-h-screen max-w-3xl flex-col gap-10 px-6 py-16">
         <header className="space-y-3">
           <p className="font-mono text-xs uppercase tracking-[0.22em] text-[#9945FF]">
-            Apis · W1 demo
+            Apis · W2 buyer
           </p>
           <h1 className="text-3xl font-semibold tracking-tight md:text-4xl">
-            Submit a fake job to{" "}
-            <span className="text-[#14F195]">apis_program</span> on devnet
+            Buy 1 inference from{" "}
+            <span className="text-[#14F195]">apis_program</span>
           </h1>
           <p className="max-w-2xl text-sm leading-relaxed text-white/60">
-            Connect Phantom (devnet), self-register as a provider, then submit
-            an inference job. No USDC moves yet — W1 is wiring only. Real
-            escrow lands in W2.
+            Pay devnet USDC into a per-job escrow vault. The registered
+            worker picks up your job, runs Flux Schnell on Apple Silicon,
+            uploads the result to IPFS, and posts the proof hash on-chain.
+            Then you settle to release the payment.
           </p>
         </header>
 
         <WalletStatusBanner walletStatus={walletStatus} address={buyerAddress} />
 
         <AnimatePresence mode="wait">
-          {providerState.kind === "loading" && walletStatus === "connected" && (
-            <Card key="loading">
+          {walletStatus === "connected" && (
+            <Card key="form">
+              <SectionTitle>Job spec</SectionTitle>
               <p className="text-sm text-white/70">
-                Reading provider state from devnet…
+                Targeting registered worker{" "}
+                <code className="text-[#14F195]">
+                  {WORKER_PROVIDER_PDA.slice(0, 8)}…
+                </code>
+                . Spec keys are hashed into <code>spec_hash</code> on-chain;
+                the prompt itself is delivered to the worker via a local
+                side-channel (W4 → MCP).
               </p>
-            </Card>
-          )}
-
-          {providerState.kind === "missing" && (
-            <Card key="missing">
-              <SectionTitle>Step 1 / 2 · Register as provider</SectionTitle>
-              <p className="text-sm text-white/70">
-                Your wallet has no <code>Provider</code> PDA yet. We&apos;ll
-                register one with stub GPU specs (
-                <code>{DEMO_GPU_SPECS}</code>) so you can target it from the job
-                form below. Pays rent only.
-              </p>
-              <PdaRow label="Provider PDA" address={providerState.pda} />
-              <NeonButton
-                onClick={handleRegister}
-                disabled={!!busy || sendTx.isSending}
-                primary
-              >
-                {busy ?? "Register as provider"}
-              </NeonButton>
-              {registerSig && (
-                <TxResult
-                  label="Registration tx"
-                  signature={registerSig}
-                />
-              )}
-            </Card>
-          )}
-
-          {providerState.kind === "registered" && (
-            <Card key="registered">
-              <SectionTitle>Step 2 / 2 · Submit a fake job</SectionTitle>
-              <p className="text-sm text-white/70">
-                Your <code>Provider</code> PDA exists on devnet. Submit an
-                inference job — the prompt is hashed off-chain into{" "}
-                <code>spec_hash</code>; W1 stores no buyer prompts on-chain.
-              </p>
-              <PdaRow
-                label="Provider PDA (target)"
-                address={providerState.pda}
-              />
 
               <label className="flex flex-col gap-2 text-sm">
                 <span className="text-xs uppercase tracking-wider text-white/50">
-                  Prompt (max 256 chars)
+                  Prompt
                 </span>
                 <textarea
                   value={prompt}
@@ -259,26 +274,49 @@ export default function SubmitPage() {
                 </span>
               </label>
 
+              <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                <NumberField label="Steps" value={steps} setValue={setSteps} min={1} max={10} />
+                <NumberField label="Width" value={width} setValue={setWidth} min={256} max={1024} step={64} />
+                <NumberField label="Height" value={height} setValue={setHeight} min={256} max={1024} step={64} />
+                <NumberField label="Seed" value={seed} setValue={setSeed} />
+              </div>
+
+              <label className="flex flex-col gap-2 text-sm">
+                <span className="text-xs uppercase tracking-wider text-white/50">
+                  Price (USDC)
+                </span>
+                <div className="flex items-baseline gap-3">
+                  <input
+                    type="text"
+                    value={priceUsdc}
+                    onChange={(e) => setPriceUsdc(e.target.value)}
+                    inputMode="decimal"
+                    className="w-32 rounded-lg border border-[#14F195]/20 bg-black/60 p-2 font-mono text-sm text-white outline-none transition focus:border-[#14F195]/60"
+                  />
+                  <span className="font-mono text-xs text-white/50">
+                    Balance: {balance ? formatUsdc(balance.amount) : "…"} USDC
+                  </span>
+                </div>
+                {insufficient && (
+                  <span className="font-mono text-xs text-[#FF3B5C]">
+                    Insufficient — fund this wallet via{" "}
+                    <code>scripts/bootstrap_devnet.py --fund {buyerAddress?.slice(0, 6)}…</code>
+                  </span>
+                )}
+                {priceLamports == null && (
+                  <span className="font-mono text-xs text-[#FF3B5C]">
+                    Invalid amount (max 6 decimals)
+                  </span>
+                )}
+              </label>
+
               <NeonButton
-                onClick={handleSubmitJob}
-                disabled={!!busy || sendTx.isSending || prompt.trim().length === 0}
+                onClick={handleSubmit}
+                disabled={!canSubmit}
                 primary
               >
-                {busy ?? "Submit fake job"}
+                {busy ?? "Submit & lock USDC"}
               </NeonButton>
-
-              {submittedJob && (
-                <div className="space-y-3 rounded-lg border border-[#14F195]/30 bg-[#14F195]/[0.04] p-4">
-                  <p className="font-mono text-xs uppercase tracking-wider text-[#14F195]">
-                    ✓ Job created
-                  </p>
-                  <PdaRow label="Job PDA" address={submittedJob.jobPda} />
-                  <TxResult
-                    label="create_job tx"
-                    signature={submittedJob.signature}
-                  />
-                </div>
-              )}
             </Card>
           )}
         </AnimatePresence>
@@ -299,6 +337,39 @@ export default function SubmitPage() {
 }
 
 // ─── Sub-components ──────────────────────────────────────────────────────
+
+function NumberField({
+  label,
+  value,
+  setValue,
+  min,
+  max,
+  step = 1,
+}: {
+  label: string;
+  value: number;
+  setValue: (n: number) => void;
+  min?: number;
+  max?: number;
+  step?: number;
+}) {
+  return (
+    <label className="flex flex-col gap-1">
+      <span className="text-xs uppercase tracking-wider text-white/50">
+        {label}
+      </span>
+      <input
+        type="number"
+        value={value}
+        min={min}
+        max={max}
+        step={step}
+        onChange={(e) => setValue(Number(e.target.value))}
+        className="rounded-lg border border-[#14F195]/20 bg-black/60 p-2 font-mono text-sm text-white outline-none transition focus:border-[#14F195]/60"
+      />
+    </label>
+  );
+}
 
 function WalletStatusBanner({
   walletStatus,
@@ -325,7 +396,14 @@ function WalletStatusBanner({
       <span className="rounded-full bg-[#14F195]/15 px-3 py-1 uppercase tracking-wider text-[#14F195]">
         Connected
       </span>
-      <code className="break-all text-white/70">{address}</code>
+      <a
+        href={explorerAccountUrl(address)}
+        target="_blank"
+        rel="noreferrer"
+        className="break-all text-white/70 underline-offset-2 hover:text-[#14F195] hover:underline"
+      >
+        {address}
+      </a>
     </div>
   );
 }
@@ -375,38 +453,6 @@ function NeonButton({
     >
       {children}
     </motion.button>
-  );
-}
-
-function PdaRow({ label, address }: { label: string; address: Address }) {
-  return (
-    <div className="flex flex-wrap items-center gap-3 font-mono text-xs">
-      <span className="text-white/50">{label}</span>
-      <a
-        href={explorerAccountUrl(address)}
-        target="_blank"
-        rel="noreferrer"
-        className="break-all rounded bg-black/60 px-2 py-1 text-white/80 underline-offset-2 hover:text-[#14F195] hover:underline"
-      >
-        {address}
-      </a>
-    </div>
-  );
-}
-
-function TxResult({ label, signature }: { label: string; signature: string }) {
-  return (
-    <div className="flex flex-wrap items-center gap-3 font-mono text-xs">
-      <span className="text-white/50">{label}</span>
-      <a
-        href={explorerTxUrl(signature)}
-        target="_blank"
-        rel="noreferrer"
-        className="break-all rounded bg-black/60 px-2 py-1 text-[#14F195] underline-offset-2 hover:underline"
-      >
-        {signature.slice(0, 12)}…{signature.slice(-12)} ↗
-      </a>
-    </div>
   );
 }
 
