@@ -57,15 +57,22 @@ pub mod apis_program {
 
     /// Create a job targeting a registered provider.
     ///
-    /// W1: `price_lamports_usdc = 0`, no token transfer. The buyer pays
-    /// only rent for the Job PDA. W2 will replace this with USDC vault
-    /// locking.
+    /// W2: locks `price_lamports_usdc` of the buyer's USDC into a per-job
+    /// EscrowVault PDA. Job status starts at `Funded` (the W1 `Created`
+    /// variant is now reserved/historical).
     pub fn create_job(
         ctx: Context<CreateJob>,
         id: u64,
         spec_hash: [u8; 32],
         deadline_offset_secs: i64,
+        price_lamports_usdc: u64,
     ) -> Result<()> {
-        create_job_handler(ctx, id, spec_hash, deadline_offset_secs)
+        create_job_handler(
+            ctx,
+            id,
+            spec_hash,
+            deadline_offset_secs,
+            price_lamports_usdc,
+        )
     }
 }

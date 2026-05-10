@@ -25,4 +25,18 @@ pub enum ApisError {
     /// `initialize_config`: fee_bps was > 10_000 (100%).
     #[msg("fee_bps must be <= 10000 (100%)")]
     FeeBpsTooHigh,
+    /// `create_job`: usdc_mint passed didn't match config.usdc_mint.
+    /// (Surfaced from the `address = config.usdc_mint` account constraint.)
+    #[msg("usdc_mint must match config.usdc_mint")]
+    WrongMint,
+    /// `create_job`: config.paused == true (admin emergency stop).
+    #[msg("config is paused; new jobs are rejected")]
+    ConfigPaused,
+    /// `create_job`: price_lamports_usdc was 0.
+    #[msg("price_lamports_usdc must be > 0")]
+    ZeroPrice,
+    /// `create_job`: post-CPI vault.amount didn't match price (Token-2022
+    /// transfer-hook partial fill or similar). Defence in depth.
+    #[msg("escrow vault amount does not match expected price")]
+    VaultAmountMismatch,
 }
