@@ -1,0 +1,83 @@
+<svg width="1500" height="500" viewBox="0 0 1500 500" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!--
+    Apis project banner — 1500×500 (3:1) wide cover image.
+    Designed for the hackathon "cover" / "social card" upload slot.
+
+    Layout: mark on the left (~ 33% of width), headline + wordmark on
+    the right. Black canvas with two radial glows (violet upper-left,
+    green lower-right) for depth.
+  -->
+
+  <defs>
+    <radialGradient id="bnrGlowL" cx="22%" cy="50%" r="38%">
+      <stop offset="0%" stop-color="#9945FF" stop-opacity="0.20"/>
+      <stop offset="100%" stop-color="#000000" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="bnrGlowR" cx="78%" cy="65%" r="35%">
+      <stop offset="0%" stop-color="#14F195" stop-opacity="0.13"/>
+      <stop offset="100%" stop-color="#000000" stop-opacity="0"/>
+    </radialGradient>
+    <!-- Reusable hex-grid pattern for subtle texture in the bg. -->
+    <pattern id="bnrHex" width="56" height="48.5" patternUnits="userSpaceOnUse" patternTransform="scale(1.4)">
+      <path d="M28 0 L56 16.17 L56 32.33 L28 48.5 L0 32.33 L0 16.17 Z"
+            fill="none" stroke="#14F195" stroke-width="0.6" stroke-opacity="0.3"/>
+    </pattern>
+  </defs>
+
+  <!-- Background. -->
+  <rect width="1500" height="500" fill="#000000"/>
+  <rect width="1500" height="500" fill="url(#bnrHex)" opacity="0.5"/>
+  <rect width="1500" height="500" fill="url(#bnrGlowL)"/>
+  <rect width="1500" height="500" fill="url(#bnrGlowR)"/>
+
+  <!-- Honeycomb cluster mark on the left (centered vertically).
+       Inner geometry uses the same 256-viewBox cluster as apis-mark.svg,
+       scaled by 1.4× and translated so the cluster center lands at
+       roughly (264, 250). -->
+  <g transform="translate(83 53) scale(1.4)">
+    <path d="M100.57 54.86 L132.21 73.14 L132.21 109.71 L100.57 128.00 L68.94 109.71 L68.94 73.14 Z"
+          stroke="#14F195" stroke-width="9" stroke-linejoin="round"/>
+    <path d="M163.93 54.86 L195.57 73.14 L195.57 109.71 L163.93 128.00 L132.30 109.71 L132.30 73.14 Z"
+          fill="#9945FF"/>
+    <path d="M132.21 109.71 L163.85 128.00 L163.85 164.57 L132.21 182.86 L100.57 164.57 L100.57 128.00 Z"
+          stroke="#9945FF" stroke-width="9" stroke-linejoin="round"/>
+    <path d="M195.55 146.29 L219.30 159.99 L219.30 187.43 L195.55 201.14 L171.80 187.43 L171.80 159.99 Z"
+          fill="#14F195"/>
+  </g>
+
+  <!-- Vertical divider between mark and copy. -->
+  <line x1="500" y1="120" x2="500" y2="380" stroke="#FAFAF9" stroke-opacity="0.10" stroke-width="1"/>
+
+  <!-- Eyebrow — small, mono, violet. -->
+  <text x="555" y="180" fill="#9945FF" fill-opacity="0.85"
+        font-family="'SF Mono', 'Geist Mono', 'Menlo', monospace"
+        font-size="22" letter-spacing="6" font-weight="500">
+    PERMISSIONLESS · ON SOLANA
+  </text>
+
+  <!-- Headline — bold, large, white. Two-line layout to fit the band. -->
+  <text x="555" y="248" fill="#FAFAF9"
+        font-family="'SF Pro Display', 'Helvetica Neue', 'Inter', sans-serif"
+        font-size="56" font-weight="800" letter-spacing="-1.5">
+    Buy compute power from
+  </text>
+  <text x="555" y="318" fill="#14F195"
+        font-family="'SF Pro Display', 'Helvetica Neue', 'Inter', sans-serif"
+        font-size="56" font-weight="800" letter-spacing="-1.5">
+    individual GPU owners.
+  </text>
+
+  <!-- Sub-tagline — medium, dim, with concrete claims. -->
+  <text x="555" y="380" fill="#FAFAF9" fill-opacity="0.55"
+        font-family="'SF Pro Display', 'Helvetica Neue', 'Inter', sans-serif"
+        font-size="24" font-weight="400">
+    Up to 80% cheaper than AWS · 0.5% protocol fee · USDC settlement
+  </text>
+
+  <!-- Wordmark watermark, bottom-right. Mono. -->
+  <text x="1450" y="460" text-anchor="end" fill="#FAFAF9" fill-opacity="0.30"
+        font-family="'SF Mono', 'Geist Mono', 'Menlo', monospace"
+        font-size="22" font-weight="700" letter-spacing="-0.5">
+    apis · apis-web-five.vercel.app
+  </text>
+</svg>

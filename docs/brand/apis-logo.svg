@@ -1,0 +1,76 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!--
+    Apis project logo — full square 1024×1024 brand surface.
+    Black canvas, subtle violet radial glow, honeycomb cluster mark
+    centered on the upper portion, "apis" wordmark below in bold mono.
+
+    Use this as the project image for hackathon submissions or any
+    canvas that needs the full brand. For an icon-only mark on a
+    transparent background, use apis-mark.svg.
+  -->
+
+  <defs>
+    <!-- Soft violet glow centered behind the cluster. -->
+    <radialGradient id="bgGlow" cx="50%" cy="44%" r="55%">
+      <stop offset="0%" stop-color="#9945FF" stop-opacity="0.20"/>
+      <stop offset="55%" stop-color="#000000" stop-opacity="0"/>
+    </radialGradient>
+    <!-- Faint Solana-green underglow at the bottom-right satellite. -->
+    <radialGradient id="satGlow" cx="62%" cy="58%" r="22%">
+      <stop offset="0%" stop-color="#14F195" stop-opacity="0.20"/>
+      <stop offset="100%" stop-color="#000000" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Solid black canvas. -->
+  <rect width="1024" height="1024" fill="#000000"/>
+
+  <!-- Atmospheric glow. -->
+  <rect width="1024" height="1024" fill="url(#bgGlow)"/>
+  <rect width="1024" height="1024" fill="url(#satGlow)"/>
+
+  <!-- Mark — same geometry as apis-mark.svg, scaled by 2.6× and translated
+       so the cluster (bounding box 68.94..219.30 × 54.86..201.14 in the
+       inner viewBox) sits centered horizontally and in the upper portion
+       of the canvas. Cluster center after this transform ≈ (512, 408). -->
+  <g transform="translate(137 175) scale(2.6)">
+    <!-- Hex A — outlined Solana green. -->
+    <path d="M100.57 54.86 L132.21 73.14 L132.21 109.71 L100.57 128.00 L68.94 109.71 L68.94 73.14 Z"
+          stroke="#14F195" stroke-width="6" stroke-linejoin="round"/>
+    <!-- Hex B — filled violet. -->
+    <path d="M163.93 54.86 L195.57 73.14 L195.57 109.71 L163.93 128.00 L132.30 109.71 L132.30 73.14 Z"
+          fill="#9945FF"/>
+    <!-- Hex C — outlined violet. -->
+    <path d="M132.21 109.71 L163.85 128.00 L163.85 164.57 L132.21 182.86 L100.57 164.57 L100.57 128.00 Z"
+          stroke="#9945FF" stroke-width="6" stroke-linejoin="round"/>
+    <!-- Hex D — filled Solana green satellite. -->
+    <path d="M195.55 146.29 L219.30 159.99 L219.30 187.43 L195.55 201.14 L171.80 187.43 L171.80 159.99 Z"
+          fill="#14F195"/>
+  </g>
+
+  <!-- Wordmark "apis" — bold mono, white, centered horizontally. Font stack
+       prefers SF Mono / Geist Mono, falls back to system monospace. -->
+  <text
+    x="512"
+    y="845"
+    text-anchor="middle"
+    fill="#FAFAF9"
+    font-family="'SF Mono', 'Geist Mono', 'Menlo', 'Consolas', monospace"
+    font-size="160"
+    font-weight="700"
+    letter-spacing="-4"
+  >apis</text>
+
+  <!-- Tagline — small caps, mono, dim. -->
+  <text
+    x="512"
+    y="920"
+    text-anchor="middle"
+    fill="#FAFAF9"
+    fill-opacity="0.45"
+    font-family="'SF Mono', 'Geist Mono', 'Menlo', 'Consolas', monospace"
+    font-size="28"
+    font-weight="500"
+    letter-spacing="6"
+  >PERMISSIONLESS GPU COMPUTE · SOLANA</text>
+</svg>
