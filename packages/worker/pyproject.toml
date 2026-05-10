@@ -1,13 +1,15 @@
 # Apis worker — Python sidecar.
 #
-# W1 scope: subscribe to Solana devnet via WebSocket, decode JobCreated
-# events emitted by apis_program, log each job to stdout. Real Flux Schnell
-# inference + IPFS upload + completion submission land in W2.
+# W1: subscribe to Solana devnet via WebSocket, decode JobCreated events
+# emitted by apis_program, log each job to stdout. (done)
+#
+# W2: real Flux Schnell inference (Apple Silicon via mflux) + IPFS upload
+# (Pinata v3 API) + submit_completion tx signing.
 
 [project]
 name = "apis-worker"
-version = "0.1.0"
-description = "Apis worker — Python sidecar that listens for JobCreated events and (in W2+) runs inference"
+version = "0.2.0"
+description = "Apis worker — Python sidecar that runs Flux Schnell on JobCreated events"
 requires-python = ">=3.12"
 license = { text = "MIT" }
 dependencies = [
@@ -17,6 +19,10 @@ dependencies = [
     "websockets>=15.0,<16",
     "Pillow>=11.0",
     "ImageHash>=4.3.2",
+    # W2 additions
+    "mflux>=0.4",        # Apple Silicon Flux Schnell (MLX-backed)
+    "python-dotenv>=1.0", # auto-load packages/worker/.env
+    "httpx>=0.28",       # already a transitive dep; pin to use for Pinata uploads
 ]
 
 [project.scripts]

@@ -3,11 +3,16 @@
 import asyncio
 import logging
 
+from dotenv import load_dotenv
+
 from .listener import listen_for_jobs
 
 
 def run() -> None:
     """Start the worker; runs until Ctrl+C."""
+    # Auto-load packages/worker/.env (PINATA_JWT, HF_TOKEN, etc.).
+    load_dotenv()
+
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(message)s",
