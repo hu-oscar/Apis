@@ -2,7 +2,25 @@
   "permissions": {
     "allow": [
       "Bash(exit 1)",
-      "Bash(grep -rEn '\\\\$[0-9]+\\(/mo|/month\\)' README.md part*.md templates/)"
+      "Bash(grep -rEn '\\\\$[0-9]+\\(/mo|/month\\)' README.md part*.md templates/)",
+      "Bash(./node_modules/.bin/ts-mocha -p ./tsconfig.json -t 1000000 tests/apis_program.test.ts)",
+      "Bash(solana program *)",
+      "Bash(anchor program *)",
+      "Bash(solana balance *)",
+      "Bash(solana airdrop *)",
+      "Bash(solana address *)",
+      "Bash(pnpm codama:generate)",
+      "Bash(pnpm typecheck *)",
+      "Bash(anchor idl *)",
+      "Bash(solana account *)",
+      "Bash(npm install *)",
+      "Bash(program-metadata upload *)",
+      "Bash(program-metadata --help)",
+      "Bash(program-metadata idl *)",
+      "Bash(program-metadata write *)",
+      "Bash(program-metadata close *)",
+      "Bash(git check-ignore *)",
+      "Bash(curl -sS -H \"Authorization: Bearer $\\(grep ^PINATA_JWT /Users/oscar/Documents/ETUDES/STARTUPS/Dev3Pack_hackathon-main/Apis/packages/worker/.env)"
     ]
   }
 }
