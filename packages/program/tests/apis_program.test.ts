@@ -8,12 +8,14 @@
 // a happy-path + at least one malicious-input test.
 //
 // Coverage:
-//   initialize_config — fee-bps-bound + happy + duplicate-init
-//   register_provider — happy + duplicate-PDA + zero-hash
-//   create_job        — happy (locks USDC) + zero-spec_hash
-//                       + zero-deadline + zero-price
-//   accept_job        — happy (Funded → Started) + double-accept
-//                       + wrong-provider
+//   initialize_config  — fee-bps-bound + happy + duplicate-init
+//   register_provider  — happy + duplicate-PDA + zero-hash
+//   create_job         — happy (locks USDC) + zero-spec_hash
+//                        + zero-deadline + zero-price
+//   accept_job         — happy (Funded → Started) + double-accept
+//                        + wrong-provider
+//   submit_completion  — happy (Started → Completed) + zero-proof
+//                        + Funded-state-rejected
 
 import { createHash, randomBytes } from "node:crypto";
 
@@ -318,6 +320,12 @@ describe("apis_program", () => {
         })
         .signers([bob])
         .rpc();
+
+      // Advance the chain so the next tx (identical signer/accounts/args)
+      // doesn't tie its signature to the same blockhash as the first
+      // call. Without this, Solana's replay-protection rejects the dup
+      // as "already processed" before our `init` constraint fires.
+      await fundSol(bankrunProvider, bob.publicKey, 0.001);
 
       // Second must fail — Anchor's `init` constraint prevents re-creating
       // an existing PDA. Surfaces from the system program as
@@ -713,6 +721,174 @@ describe("apis_program", () => {
       } catch (err) {
         const m = errMsg(err);
         assert.match(m, /WrongProvider/, `expected WrongProvider, got: ${m}`);
+      }
+    });
+  });
+
+  // ────────────────────────────────────────────────────────────
+  // submit_completion — Started → Completed (W2-1d)
+  //
+  // Test order matters again: the malicious zero-proof case must run
+  // BEFORE the happy case. After happy moves the job to Completed,
+  // any further submit attempt fails on the `status == Started`
+  // constraint (JobNotStarted) before the require!() proof check fires.
+  // ────────────────────────────────────────────────────────────
+
+  describe("submit_completion", () => {
+    let buyer: anchor.web3.Keypair;
+    let providerOwner: anchor.web3.Keypair;
+    let providerPda: PublicKey;
+    let jobPdaStarted: PublicKey; // accepted in before(); Started state
+    let jobPdaFunded: PublicKey; // created but not accepted; Funded state
+    const configPda = findConfigPda();
+
+    before(async () => {
+      [buyer, providerOwner] = makeKeypairs(2);
+      await fundSol(bankrunProvider, buyer.publicKey);
+      await fundSol(bankrunProvider, providerOwner.publicKey);
+
+      providerPda = findProviderPda(providerOwner.publicKey);
+      await program.methods
+        .registerProvider(
+          [...sha256("RTX 4090 / submit_completion test")],
+          [...sha256("wss://submit-test.example.com")],
+        )
+        .accountsPartial({
+          authority: providerOwner.publicKey,
+          provider: providerPda,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([providerOwner])
+        .rpc();
+
+      const buyerUsdcAta = await fundUsdc(buyer.publicKey, 10_000_000);
+
+      // jobStarted: created + accepted → ends at Started.
+      const idStarted = new BN(randomBytes(8));
+      jobPdaStarted = findJobPda(buyer.publicKey, idStarted);
+      const vaultStarted = getAssociatedTokenAddressSync(
+        paymentMint,
+        jobPdaStarted,
+        true,
+        TOKEN_PROGRAM_ID,
+      );
+      await program.methods
+        .createJob(
+          idStarted,
+          [...sha256("started job for submit_completion")],
+          new BN(600),
+          new BN(1_000_000),
+        )
+        .accountsPartial({
+          buyer: buyer.publicKey,
+          config: configPda,
+          provider: providerPda,
+          usdcMint: paymentMint,
+          buyerUsdcAta,
+          job: jobPdaStarted,
+          escrowVault: vaultStarted,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([buyer])
+        .rpc();
+      await program.methods
+        .acceptJob()
+        .accountsPartial({
+          authority: providerOwner.publicKey,
+          provider: providerPda,
+          job: jobPdaStarted,
+        })
+        .signers([providerOwner])
+        .rpc();
+
+      // jobFunded: created only → stays Funded.
+      const idFunded = new BN(randomBytes(8));
+      jobPdaFunded = findJobPda(buyer.publicKey, idFunded);
+      const vaultFunded = getAssociatedTokenAddressSync(
+        paymentMint,
+        jobPdaFunded,
+        true,
+        TOKEN_PROGRAM_ID,
+      );
+      await program.methods
+        .createJob(
+          idFunded,
+          [...sha256("funded job for submit_completion")],
+          new BN(600),
+          new BN(1_000_000),
+        )
+        .accountsPartial({
+          buyer: buyer.publicKey,
+          config: configPda,
+          provider: providerPda,
+          usdcMint: paymentMint,
+          buyerUsdcAta,
+          job: jobPdaFunded,
+          escrowVault: vaultFunded,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([buyer])
+        .rpc();
+    });
+
+    it("malicious: zero proof_hash → ApisError::ProofHashZero", async () => {
+      try {
+        await program.methods
+          .submitCompletion([...ZERO_HASH])
+          .accountsPartial({
+            authority: providerOwner.publicKey,
+            provider: providerPda,
+            job: jobPdaStarted,
+          })
+          .signers([providerOwner])
+          .rpc();
+        assert.fail("expected ProofHashZero");
+      } catch (err) {
+        const m = errMsg(err);
+        assert.match(m, /ProofHashZero/, `expected ProofHashZero, got: ${m}`);
+      }
+    });
+
+    it("happy: Started → Completed; proof_hash recorded", async () => {
+      const proofHash = sha256("inference result tensor hash");
+
+      await program.methods
+        .submitCompletion([...proofHash])
+        .accountsPartial({
+          authority: providerOwner.publicKey,
+          provider: providerPda,
+          job: jobPdaStarted,
+        })
+        .signers([providerOwner])
+        .rpc();
+
+      const job = await program.account.job.fetch(jobPdaStarted);
+      assert.deepEqual(job.status, { completed: {} });
+      assert.isNotNull(job.completionProofHash, "proof_hash should be Some");
+      expect([...(job.completionProofHash as number[])]).to.deep.equal([
+        ...proofHash,
+      ]);
+    });
+
+    it("malicious: submitting on a Funded job → JobNotStarted", async () => {
+      try {
+        await program.methods
+          .submitCompletion([...sha256("any proof")])
+          .accountsPartial({
+            authority: providerOwner.publicKey,
+            provider: providerPda,
+            job: jobPdaFunded,
+          })
+          .signers([providerOwner])
+          .rpc();
+        assert.fail("expected JobNotStarted");
+      } catch (err) {
+        const m = errMsg(err);
+        assert.match(m, /JobNotStarted/, `expected JobNotStarted, got: ${m}`);
       }
     });
   });

@@ -48,4 +48,10 @@ pub enum ApisError {
     /// `accept_job`: provider.authority didn't match the signer.
     #[msg("signer is not the provider's authority")]
     WrongProviderAuthority,
+    /// `submit_completion`: job.status was not Started.
+    #[msg("job is not in Started status")]
+    JobNotStarted,
+    /// `submit_completion`: proof_hash was the zero hash; reject.
+    #[msg("proof_hash must not be zero")]
+    ProofHashZero,
 }
