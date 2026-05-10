@@ -13,13 +13,9 @@ import {
   getAddressEncoder,
   getBytesDecoder,
   getBytesEncoder,
-  getI64Decoder,
-  getI64Encoder,
   getProgramDerivedAddress,
   getStructDecoder,
   getStructEncoder,
-  getU64Decoder,
-  getU64Encoder,
   SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
   SolanaError,
   transformEncoder,
@@ -41,28 +37,26 @@ import {
 import {
   getAccountMetaFactory,
   getAddressFromResolvedInstructionAccount,
-  getNonNullResolvedInstructionInput,
   type ResolvedInstructionAccount,
 } from "@solana/program-client-core";
-import { findConfigPda, findJobPda } from "../pdas";
+import { findConfigPda } from "../pdas";
 import { APIS_PROGRAM_PROGRAM_ADDRESS } from "../programs";
 
-export const CREATE_JOB_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array([
-  178, 130, 217, 110, 100, 27, 82, 119,
+export const CANCEL_JOB_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array([
+  126, 241, 155, 241, 50, 236, 83, 118,
 ]);
 
-export function getCreateJobDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(CREATE_JOB_DISCRIMINATOR);
+export function getCancelJobDiscriminatorBytes(): ReadonlyUint8Array {
+  return fixEncoderSize(getBytesEncoder(), 8).encode(CANCEL_JOB_DISCRIMINATOR);
 }
 
-export type CreateJobInstruction<
+export type CancelJobInstruction<
   TProgram extends string = typeof APIS_PROGRAM_PROGRAM_ADDRESS,
   TAccountBuyer extends string | AccountMeta<string> = string,
   TAccountConfig extends string | AccountMeta<string> = string,
-  TAccountProvider extends string | AccountMeta<string> = string,
+  TAccountJob extends string | AccountMeta<string> = string,
   TAccountUsdcMint extends string | AccountMeta<string> = string,
   TAccountBuyerUsdcAta extends string | AccountMeta<string> = string,
-  TAccountJob extends string | AccountMeta<string> = string,
   TAccountEscrowVault extends string | AccountMeta<string> = string,
   TAccountTokenProgram extends string | AccountMeta<string> =
     "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
@@ -82,16 +76,13 @@ export type CreateJobInstruction<
       TAccountConfig extends string
         ? ReadonlyAccount<TAccountConfig>
         : TAccountConfig,
-      TAccountProvider extends string
-        ? ReadonlyAccount<TAccountProvider>
-        : TAccountProvider,
+      TAccountJob extends string ? WritableAccount<TAccountJob> : TAccountJob,
       TAccountUsdcMint extends string
         ? ReadonlyAccount<TAccountUsdcMint>
         : TAccountUsdcMint,
       TAccountBuyerUsdcAta extends string
         ? WritableAccount<TAccountBuyerUsdcAta>
         : TAccountBuyerUsdcAta,
-      TAccountJob extends string ? WritableAccount<TAccountJob> : TAccountJob,
       TAccountEscrowVault extends string
         ? WritableAccount<TAccountEscrowVault>
         : TAccountEscrowVault,
@@ -108,118 +99,82 @@ export type CreateJobInstruction<
     ]
   >;
 
-export type CreateJobInstructionData = {
-  discriminator: ReadonlyUint8Array;
-  id: bigint;
-  specHash: ReadonlyUint8Array;
-  deadlineOffsetSecs: bigint;
-  priceLamportsUsdc: bigint;
-};
+export type CancelJobInstructionData = { discriminator: ReadonlyUint8Array };
 
-export type CreateJobInstructionDataArgs = {
-  id: number | bigint;
-  specHash: ReadonlyUint8Array;
-  deadlineOffsetSecs: number | bigint;
-  priceLamportsUsdc: number | bigint;
-};
+export type CancelJobInstructionDataArgs = {};
 
-export function getCreateJobInstructionDataEncoder(): FixedSizeEncoder<CreateJobInstructionDataArgs> {
+export function getCancelJobInstructionDataEncoder(): FixedSizeEncoder<CancelJobInstructionDataArgs> {
   return transformEncoder(
-    getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
-      ["id", getU64Encoder()],
-      ["specHash", fixEncoderSize(getBytesEncoder(), 32)],
-      ["deadlineOffsetSecs", getI64Encoder()],
-      ["priceLamportsUsdc", getU64Encoder()],
-    ]),
-    (value) => ({ ...value, discriminator: CREATE_JOB_DISCRIMINATOR })
+    getStructEncoder([["discriminator", fixEncoderSize(getBytesEncoder(), 8)]]),
+    (value) => ({ ...value, discriminator: CANCEL_JOB_DISCRIMINATOR })
   );
 }
 
-export function getCreateJobInstructionDataDecoder(): FixedSizeDecoder<CreateJobInstructionData> {
+export function getCancelJobInstructionDataDecoder(): FixedSizeDecoder<CancelJobInstructionData> {
   return getStructDecoder([
     ["discriminator", fixDecoderSize(getBytesDecoder(), 8)],
-    ["id", getU64Decoder()],
-    ["specHash", fixDecoderSize(getBytesDecoder(), 32)],
-    ["deadlineOffsetSecs", getI64Decoder()],
-    ["priceLamportsUsdc", getU64Decoder()],
   ]);
 }
 
-export function getCreateJobInstructionDataCodec(): FixedSizeCodec<
-  CreateJobInstructionDataArgs,
-  CreateJobInstructionData
+export function getCancelJobInstructionDataCodec(): FixedSizeCodec<
+  CancelJobInstructionDataArgs,
+  CancelJobInstructionData
 > {
   return combineCodec(
-    getCreateJobInstructionDataEncoder(),
-    getCreateJobInstructionDataDecoder()
+    getCancelJobInstructionDataEncoder(),
+    getCancelJobInstructionDataDecoder()
   );
 }
 
-export type CreateJobAsyncInput<
+export type CancelJobAsyncInput<
   TAccountBuyer extends string = string,
   TAccountConfig extends string = string,
-  TAccountProvider extends string = string,
+  TAccountJob extends string = string,
   TAccountUsdcMint extends string = string,
   TAccountBuyerUsdcAta extends string = string,
-  TAccountJob extends string = string,
   TAccountEscrowVault extends string = string,
   TAccountTokenProgram extends string = string,
   TAccountAssociatedTokenProgram extends string = string,
   TAccountSystemProgram extends string = string,
 > = {
-  /**
-   * Buyer wallet. Pays rent for the Job + EscrowVault and signs the
-   * USDC transfer into the vault.
-   */
+  /** Buyer cancelling. Receives the USDC refund + vault/Job rent. */
   buyer: TransactionSigner<TAccountBuyer>;
-  /** Singleton config. Read-only; constrains `usdc_mint` below. */
+  /** Singleton config — only consulted for `usdc_mint`. */
   config?: Address<TAccountConfig>;
-  /** Provider PDA being targeted. Existence proves registration. */
-  provider: Address<TAccountProvider>;
   /**
-   * USDC mint. Constrained to match `config.usdc_mint` so the buyer
-   * can't escrow some other token and call it USDC.
+   * Job to cancel. Must be the buyer's, Funded, and gets closed
+   * (rent → buyer) via Anchor's `close = buyer`.
    */
+  job: Address<TAccountJob>;
+  /** USDC mint — matches config.usdc_mint. */
   usdcMint: Address<TAccountUsdcMint>;
-  /** Buyer's USDC associated token account (source of the escrow). */
+  /** Buyer's USDC ATA — receives the refund. */
   buyerUsdcAta?: Address<TAccountBuyerUsdcAta>;
-  /** New Job PDA. */
-  job?: Address<TAccountJob>;
-  /**
-   * Per-job EscrowVault — ATA owned by the Job PDA. Holds the locked
-   * USDC until `confirm_completion` or `cancel_job` closes it.
-   */
+  /** Per-job EscrowVault — drained then closed. */
   escrowVault?: Address<TAccountEscrowVault>;
   tokenProgram?: Address<TAccountTokenProgram>;
   associatedTokenProgram?: Address<TAccountAssociatedTokenProgram>;
   systemProgram?: Address<TAccountSystemProgram>;
-  id: CreateJobInstructionDataArgs["id"];
-  specHash: CreateJobInstructionDataArgs["specHash"];
-  deadlineOffsetSecs: CreateJobInstructionDataArgs["deadlineOffsetSecs"];
-  priceLamportsUsdc: CreateJobInstructionDataArgs["priceLamportsUsdc"];
 };
 
-export async function getCreateJobInstructionAsync<
+export async function getCancelJobInstructionAsync<
   TAccountBuyer extends string,
   TAccountConfig extends string,
-  TAccountProvider extends string,
+  TAccountJob extends string,
   TAccountUsdcMint extends string,
   TAccountBuyerUsdcAta extends string,
-  TAccountJob extends string,
   TAccountEscrowVault extends string,
   TAccountTokenProgram extends string,
   TAccountAssociatedTokenProgram extends string,
   TAccountSystemProgram extends string,
   TProgramAddress extends Address = typeof APIS_PROGRAM_PROGRAM_ADDRESS,
 >(
-  input: CreateJobAsyncInput<
+  input: CancelJobAsyncInput<
     TAccountBuyer,
     TAccountConfig,
-    TAccountProvider,
+    TAccountJob,
     TAccountUsdcMint,
     TAccountBuyerUsdcAta,
-    TAccountJob,
     TAccountEscrowVault,
     TAccountTokenProgram,
     TAccountAssociatedTokenProgram,
@@ -227,14 +182,13 @@ export async function getCreateJobInstructionAsync<
   >,
   config?: { programAddress?: TProgramAddress }
 ): Promise<
-  CreateJobInstruction<
+  CancelJobInstruction<
     TProgramAddress,
     TAccountBuyer,
     TAccountConfig,
-    TAccountProvider,
+    TAccountJob,
     TAccountUsdcMint,
     TAccountBuyerUsdcAta,
-    TAccountJob,
     TAccountEscrowVault,
     TAccountTokenProgram,
     TAccountAssociatedTokenProgram,
@@ -248,10 +202,9 @@ export async function getCreateJobInstructionAsync<
   const originalAccounts = {
     buyer: { value: input.buyer ?? null, isWritable: true },
     config: { value: input.config ?? null, isWritable: false },
-    provider: { value: input.provider ?? null, isWritable: false },
+    job: { value: input.job ?? null, isWritable: true },
     usdcMint: { value: input.usdcMint ?? null, isWritable: false },
     buyerUsdcAta: { value: input.buyerUsdcAta ?? null, isWritable: true },
-    job: { value: input.job ?? null, isWritable: true },
     escrowVault: { value: input.escrowVault ?? null, isWritable: true },
     tokenProgram: { value: input.tokenProgram ?? null, isWritable: false },
     associatedTokenProgram: {
@@ -264,9 +217,6 @@ export async function getCreateJobInstructionAsync<
     keyof typeof originalAccounts,
     ResolvedInstructionAccount
   >;
-
-  // Original args.
-  const args = { ...input };
 
   // Resolve default values.
   if (!accounts.config.value) {
@@ -297,15 +247,6 @@ export async function getCreateJobInstructionAsync<
           )
         ),
       ],
-    });
-  }
-  if (!accounts.job.value) {
-    accounts.job.value = await findJobPda({
-      buyer: getAddressFromResolvedInstructionAccount(
-        "buyer",
-        accounts.buyer.value
-      ),
-      id: getNonNullResolvedInstructionInput("id", args.id),
     });
   }
   if (!accounts.escrowVault.value) {
@@ -350,27 +291,23 @@ export async function getCreateJobInstructionAsync<
     accounts: [
       getAccountMeta("buyer", accounts.buyer),
       getAccountMeta("config", accounts.config),
-      getAccountMeta("provider", accounts.provider),
+      getAccountMeta("job", accounts.job),
       getAccountMeta("usdcMint", accounts.usdcMint),
       getAccountMeta("buyerUsdcAta", accounts.buyerUsdcAta),
-      getAccountMeta("job", accounts.job),
       getAccountMeta("escrowVault", accounts.escrowVault),
       getAccountMeta("tokenProgram", accounts.tokenProgram),
       getAccountMeta("associatedTokenProgram", accounts.associatedTokenProgram),
       getAccountMeta("systemProgram", accounts.systemProgram),
     ],
-    data: getCreateJobInstructionDataEncoder().encode(
-      args as CreateJobInstructionDataArgs
-    ),
+    data: getCancelJobInstructionDataEncoder().encode({}),
     programAddress,
-  } as CreateJobInstruction<
+  } as CancelJobInstruction<
     TProgramAddress,
     TAccountBuyer,
     TAccountConfig,
-    TAccountProvider,
+    TAccountJob,
     TAccountUsdcMint,
     TAccountBuyerUsdcAta,
-    TAccountJob,
     TAccountEscrowVault,
     TAccountTokenProgram,
     TAccountAssociatedTokenProgram,
@@ -378,84 +315,68 @@ export async function getCreateJobInstructionAsync<
   >);
 }
 
-export type CreateJobInput<
+export type CancelJobInput<
   TAccountBuyer extends string = string,
   TAccountConfig extends string = string,
-  TAccountProvider extends string = string,
+  TAccountJob extends string = string,
   TAccountUsdcMint extends string = string,
   TAccountBuyerUsdcAta extends string = string,
-  TAccountJob extends string = string,
   TAccountEscrowVault extends string = string,
   TAccountTokenProgram extends string = string,
   TAccountAssociatedTokenProgram extends string = string,
   TAccountSystemProgram extends string = string,
 > = {
-  /**
-   * Buyer wallet. Pays rent for the Job + EscrowVault and signs the
-   * USDC transfer into the vault.
-   */
+  /** Buyer cancelling. Receives the USDC refund + vault/Job rent. */
   buyer: TransactionSigner<TAccountBuyer>;
-  /** Singleton config. Read-only; constrains `usdc_mint` below. */
+  /** Singleton config — only consulted for `usdc_mint`. */
   config: Address<TAccountConfig>;
-  /** Provider PDA being targeted. Existence proves registration. */
-  provider: Address<TAccountProvider>;
   /**
-   * USDC mint. Constrained to match `config.usdc_mint` so the buyer
-   * can't escrow some other token and call it USDC.
+   * Job to cancel. Must be the buyer's, Funded, and gets closed
+   * (rent → buyer) via Anchor's `close = buyer`.
    */
-  usdcMint: Address<TAccountUsdcMint>;
-  /** Buyer's USDC associated token account (source of the escrow). */
-  buyerUsdcAta: Address<TAccountBuyerUsdcAta>;
-  /** New Job PDA. */
   job: Address<TAccountJob>;
-  /**
-   * Per-job EscrowVault — ATA owned by the Job PDA. Holds the locked
-   * USDC until `confirm_completion` or `cancel_job` closes it.
-   */
+  /** USDC mint — matches config.usdc_mint. */
+  usdcMint: Address<TAccountUsdcMint>;
+  /** Buyer's USDC ATA — receives the refund. */
+  buyerUsdcAta: Address<TAccountBuyerUsdcAta>;
+  /** Per-job EscrowVault — drained then closed. */
   escrowVault: Address<TAccountEscrowVault>;
   tokenProgram?: Address<TAccountTokenProgram>;
   associatedTokenProgram?: Address<TAccountAssociatedTokenProgram>;
   systemProgram?: Address<TAccountSystemProgram>;
-  id: CreateJobInstructionDataArgs["id"];
-  specHash: CreateJobInstructionDataArgs["specHash"];
-  deadlineOffsetSecs: CreateJobInstructionDataArgs["deadlineOffsetSecs"];
-  priceLamportsUsdc: CreateJobInstructionDataArgs["priceLamportsUsdc"];
 };
 
-export function getCreateJobInstruction<
+export function getCancelJobInstruction<
   TAccountBuyer extends string,
   TAccountConfig extends string,
-  TAccountProvider extends string,
+  TAccountJob extends string,
   TAccountUsdcMint extends string,
   TAccountBuyerUsdcAta extends string,
-  TAccountJob extends string,
   TAccountEscrowVault extends string,
   TAccountTokenProgram extends string,
   TAccountAssociatedTokenProgram extends string,
   TAccountSystemProgram extends string,
   TProgramAddress extends Address = typeof APIS_PROGRAM_PROGRAM_ADDRESS,
 >(
-  input: CreateJobInput<
+  input: CancelJobInput<
     TAccountBuyer,
     TAccountConfig,
-    TAccountProvider,
+    TAccountJob,
     TAccountUsdcMint,
     TAccountBuyerUsdcAta,
-    TAccountJob,
     TAccountEscrowVault,
     TAccountTokenProgram,
     TAccountAssociatedTokenProgram,
     TAccountSystemProgram
   >,
   config?: { programAddress?: TProgramAddress }
-): CreateJobInstruction<
+): CancelJobInstruction<
   TProgramAddress,
   TAccountBuyer,
   TAccountConfig,
-  TAccountProvider,
+  TAccountJob,
   TAccountUsdcMint,
   TAccountBuyerUsdcAta,
-  TAccountJob,
   TAccountEscrowVault,
   TAccountTokenProgram,
   TAccountAssociatedTokenProgram,
@@ -468,10 +389,9 @@ export function getCreateJobInstruction<
   const originalAccounts = {
     buyer: { value: input.buyer ?? null, isWritable: true },
     config: { value: input.config ?? null, isWritable: false },
-    provider: { value: input.provider ?? null, isWritable: false },
+    job: { value: input.job ?? null, isWritable: true },
     usdcMint: { value: input.usdcMint ?? null, isWritable: false },
     buyerUsdcAta: { value: input.buyerUsdcAta ?? null, isWritable: true },
-    job: { value: input.job ?? null, isWritable: true },
     escrowVault: { value: input.escrowVault ?? null, isWritable: true },
     tokenProgram: { value: input.tokenProgram ?? null, isWritable: false },
     associatedTokenProgram: {
@@ -484,9 +404,6 @@ export function getCreateJobInstruction<
     keyof typeof originalAccounts,
     ResolvedInstructionAccount
   >;
-
-  // Original args.
-  const args = { ...input };
 
   // Resolve default values.
   if (!accounts.tokenProgram.value) {
@@ -507,27 +424,23 @@ export function getCreateJobInstruction<
     accounts: [
       getAccountMeta("buyer", accounts.buyer),
       getAccountMeta("config", accounts.config),
-      getAccountMeta("provider", accounts.provider),
+      getAccountMeta("job", accounts.job),
       getAccountMeta("usdcMint", accounts.usdcMint),
       getAccountMeta("buyerUsdcAta", accounts.buyerUsdcAta),
-      getAccountMeta("job", accounts.job),
       getAccountMeta("escrowVault", accounts.escrowVault),
       getAccountMeta("tokenProgram", accounts.tokenProgram),
       getAccountMeta("associatedTokenProgram", accounts.associatedTokenProgram),
       getAccountMeta("systemProgram", accounts.systemProgram),
     ],
-    data: getCreateJobInstructionDataEncoder().encode(
-      args as CreateJobInstructionDataArgs
-    ),
+    data: getCancelJobInstructionDataEncoder().encode({}),
     programAddress,
-  } as CreateJobInstruction<
+  } as CancelJobInstruction<
     TProgramAddress,
     TAccountBuyer,
     TAccountConfig,
-    TAccountProvider,
+    TAccountJob,
     TAccountUsdcMint,
     TAccountBuyerUsdcAta,
-    TAccountJob,
     TAccountEscrowVault,
     TAccountTokenProgram,
     TAccountAssociatedTokenProgram,
@@ -535,56 +448,48 @@ export function getCreateJobInstruction<
   >);
 }
 
-export type ParsedCreateJobInstruction<
+export type ParsedCancelJobInstruction<
   TProgram extends string = typeof APIS_PROGRAM_PROGRAM_ADDRESS,
   TAccountMetas extends readonly AccountMeta[] = readonly AccountMeta[],
 > = {
   programAddress: Address<TProgram>;
   accounts: {
-    /**
-     * Buyer wallet. Pays rent for the Job + EscrowVault and signs the
-     * USDC transfer into the vault.
-     */
+    /** Buyer cancelling. Receives the USDC refund + vault/Job rent. */
     buyer: TAccountMetas[0];
-    /** Singleton config. Read-only; constrains `usdc_mint` below. */
+    /** Singleton config — only consulted for `usdc_mint`. */
     config: TAccountMetas[1];
-    /** Provider PDA being targeted. Existence proves registration. */
-    provider: TAccountMetas[2];
     /**
-     * USDC mint. Constrained to match `config.usdc_mint` so the buyer
-     * can't escrow some other token and call it USDC.
+     * Job to cancel. Must be the buyer's, Funded, and gets closed
+     * (rent → buyer) via Anchor's `close = buyer`.
      */
+    job: TAccountMetas[2];
+    /** USDC mint — matches config.usdc_mint. */
     usdcMint: TAccountMetas[3];
-    /** Buyer's USDC associated token account (source of the escrow). */
+    /** Buyer's USDC ATA — receives the refund. */
     buyerUsdcAta: TAccountMetas[4];
-    /** New Job PDA. */
-    job: TAccountMetas[5];
-    /**
-     * Per-job EscrowVault — ATA owned by the Job PDA. Holds the locked
-     * USDC until `confirm_completion` or `cancel_job` closes it.
-     */
-    escrowVault: TAccountMetas[6];
-    tokenProgram: TAccountMetas[7];
-    associatedTokenProgram: TAccountMetas[8];
-    systemProgram: TAccountMetas[9];
+    /** Per-job EscrowVault — drained then closed. */
+    escrowVault: TAccountMetas[5];
+    tokenProgram: TAccountMetas[6];
+    associatedTokenProgram: TAccountMetas[7];
+    systemProgram: TAccountMetas[8];
   };
-  data: CreateJobInstructionData;
+  data: CancelJobInstructionData;
 };
 
-export function parseCreateJobInstruction<
+export function parseCancelJobInstruction<
   TProgram extends string,
   TAccountMetas extends readonly AccountMeta[],
 >(
   instruction: Instruction<TProgram> &
     InstructionWithAccounts<TAccountMetas> &
     InstructionWithData<ReadonlyUint8Array>
-): ParsedCreateJobInstruction<TProgram, TAccountMetas> {
-  if (instruction.accounts.length < 10) {
+): ParsedCancelJobInstruction<TProgram, TAccountMetas> {
+  if (instruction.accounts.length < 9) {
     throw new SolanaError(
       SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
       {
         actualAccountMetas: instruction.accounts.length,
-        expectedAccountMetas: 10,
+        expectedAccountMetas: 9,
       }
     );
   }
@@ -599,15 +504,14 @@ export function parseCreateJobInstruction<
     accounts: {
       buyer: getNextAccount(),
       config: getNextAccount(),
-      provider: getNextAccount(),
+      job: getNextAccount(),
       usdcMint: getNextAccount(),
       buyerUsdcAta: getNextAccount(),
-      job: getNextAccount(),
       escrowVault: getNextAccount(),
       tokenProgram: getNextAccount(),
       associatedTokenProgram: getNextAccount(),
       systemProgram: getNextAccount(),
     },
-    data: getCreateJobInstructionDataDecoder().decode(instruction.data),
+    data: getCancelJobInstructionDataDecoder().decode(instruction.data),
   };
 }

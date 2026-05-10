@@ -3,7 +3,11 @@
 // PDA derivation, instruction builders, and account decoders all come from
 // `@/lib/apis-program` (Codama output). This file holds the small extras:
 // sha256 hashing for the on-chain spec hashes, a random u64 Job id
-// generator, and a Solana Explorer URL formatter for tx-success UIs.
+// generator, ATA derivation, balance reads, and a Solana Explorer URL
+// formatter for tx-success UIs.
+
+import { getAddressEncoder, getProgramDerivedAddress } from "@solana/kit";
+import type { Address } from "@solana/kit";
 
 /**
  * sha256 hash of a UTF-8 string, returned as a 32-byte `Uint8Array`.
@@ -61,4 +65,59 @@ export function explorerAccountUrl(
 ): string {
   const base = `https://explorer.solana.com/address/${address}`;
   return cluster === "mainnet-beta" ? base : `${base}?cluster=${cluster}`;
+}
+
+const TOKEN_PROGRAM_ADDRESS =
+  "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" as Address;
+const ASSOCIATED_TOKEN_PROGRAM_ADDRESS =
+  "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL" as Address;
+
+/**
+ * Compute the classic-Token associated token account address for
+ * `(owner, mint)`. Mirrors what the Codama-generated `createJob`
+ * instruction builder does internally for the buyer's USDC ATA — we
+ * also need it externally to read the balance for the UI's
+ * insufficient-funds gate.
+ */
+export async function findAssociatedTokenAddress(
+  owner: Address,
+  mint: Address,
+): Promise<Address> {
+  const addressEncoder = getAddressEncoder();
+  const [pda] = await getProgramDerivedAddress({
+    programAddress: ASSOCIATED_TOKEN_PROGRAM_ADDRESS,
+    seeds: [
+      addressEncoder.encode(owner),
+      addressEncoder.encode(TOKEN_PROGRAM_ADDRESS),
+      addressEncoder.encode(mint),
+    ],
+  });
+  return pda;
+}
+
+/**
+ * Read an SPL token account's balance via `getTokenAccountBalance`.
+ * Returns the amount in base units (`bigint`) plus the mint's decimals.
+ *
+ * Returns `null` if the ATA doesn't exist yet — common for buyers who
+ * haven't been minted any test USDC. The /submit page surfaces this as
+ * "no USDC ATA — request a faucet drip".
+ */
+export async function tryReadTokenBalance(
+  rpc: {
+    getTokenAccountBalance: (
+      address: Address,
+    ) => { send: () => Promise<{ value: { amount: string; decimals: number } }> };
+  },
+  ata: Address,
+): Promise<{ amount: bigint; decimals: number } | null> {
+  try {
+    const resp = await rpc.getTokenAccountBalance(ata).send();
+    return {
+      amount: BigInt(resp.value.amount),
+      decimals: resp.value.decimals,
+    };
+  } catch {
+    return null;
+  }
 }

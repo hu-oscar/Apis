@@ -10,10 +10,12 @@ from it. Safe to invoke multiple times.
 
 Usage:
     .venv/bin/python scripts/bootstrap_devnet.py
+    .venv/bin/python scripts/bootstrap_devnet.py --fund <PHANTOM_PUBKEY> [--amount 100]
 """
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import hashlib
 import json
@@ -172,7 +174,73 @@ async def _initialize_config(
     return str(sig)
 
 
+def _fund_external_wallet(
+    deployer_path: Path,
+    mint: Pubkey,
+    recipient: Pubkey,
+    amount_tokens: int,
+) -> Pubkey:
+    """Mint test USDC to an arbitrary recipient's ATA. Used to fund a
+    Phantom wallet for the W2 web demo without forcing the user to copy
+    the deployer keypair into Phantom. Creates the recipient's ATA
+    (idempotent) then mints `amount_tokens` (in whole-token units, scaled
+    by 10**6 base units) to it. Returns the ATA address."""
+    print(f"Creating + funding {recipient}'s ATA for {mint}…")
+    out = _run_solana_cli([
+        "spl-token", "create-account",
+        str(mint),
+        "--owner", str(recipient),
+        "--fee-payer", str(deployer_path),
+        "--url", "devnet",
+    ])
+    ata_str: str | None = None
+    for line in out.splitlines():
+        for w in line.split():
+            if 32 <= len(w) <= 44 and w[0].isalnum():
+                try:
+                    Pubkey.from_string(w)
+                    ata_str = w
+                    break
+                except ValueError:
+                    continue
+        if ata_str:
+            break
+    if ata_str is None:
+        raise RuntimeError(f"Couldn't determine recipient ATA from:\n{out}")
+    ata = Pubkey.from_string(ata_str)
+
+    print(f"Minting {amount_tokens} tokens to {ata}…")
+    _run_solana_cli([
+        "spl-token", "mint",
+        str(mint),
+        str(amount_tokens),
+        str(ata),
+        "--mint-authority", str(deployer_path),
+        "--fee-payer", str(deployer_path),
+        "--url", "devnet",
+    ])
+    return ata
+
+
 async def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--fund",
+        type=str,
+        default=None,
+        metavar="PUBKEY",
+        help="If set, mint test USDC to this base58 pubkey's ATA "
+        "(in addition to the deployer's). Use this to fund the "
+        "Phantom wallet that drives the web /submit demo.",
+    )
+    parser.add_argument(
+        "--amount",
+        type=int,
+        default=INITIAL_MINT_AMOUNT_TOKENS,
+        help=f"Amount in whole tokens (default {INITIAL_MINT_AMOUNT_TOKENS}).",
+    )
+    args = parser.parse_args()
+
     if not DEPLOYER_KEYPAIR_PATH.exists():
         print(f"✗ Deployer keypair not found at {DEPLOYER_KEYPAIR_PATH}")
         sys.exit(1)
@@ -215,14 +283,28 @@ async def main() -> None:
             DEPLOYER_KEYPAIR_PATH, usdc_mint, INITIAL_MINT_AMOUNT_TOKENS
         )
 
+    if args.fund:
+        try:
+            recipient = Pubkey.from_string(args.fund)
+        except ValueError:
+            print(f"✗ --fund {args.fund!r} is not a valid base58 pubkey")
+            sys.exit(1)
+        funded_ata = _fund_external_wallet(
+            DEPLOYER_KEYPAIR_PATH, usdc_mint, recipient, args.amount
+        )
+        print(f"✓ Funded {recipient} with {args.amount} test USDC (ATA: {funded_ata})")
+        print()
+
     print()
     print("──── Bootstrap state ────")
     print(f"Buyer (deployer): {deployer.pubkey()}")
     print(f"Buyer USDC ATA:   {ata}")
     print(f"USDC mint:        {usdc_mint}")
     print(f"Config PDA:       {config_pda}")
+    if args.fund:
+        print(f"External wallet:  {args.fund}")
     print()
-    print("Next step: scripts/test_create_job.py")
+    print("Next step: scripts/test_create_job.py (or open /submit in the web app)")
 
 
 if __name__ == "__main__":

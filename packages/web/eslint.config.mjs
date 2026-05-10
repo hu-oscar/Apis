@@ -12,6 +12,11 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Codama-generated client — regenerated on every IDL change. The
+    // generator emits some patterns ESLint complains about (`{}` types,
+    // unused exports) but rewriting them by hand would defeat the
+    // generator. Trust the upstream output.
+    "app/lib/generated/**",
   ]),
 ]);
 

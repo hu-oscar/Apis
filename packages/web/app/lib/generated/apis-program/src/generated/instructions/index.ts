@@ -6,5 +6,10 @@
  * @see https://github.com/codama-idl/codama
  */
 
+export * from "./acceptJob";
+export * from "./cancelJob";
+export * from "./confirmCompletion";
 export * from "./createJob";
+export * from "./initializeConfig";
 export * from "./registerProvider";
+export * from "./submitCompletion";
