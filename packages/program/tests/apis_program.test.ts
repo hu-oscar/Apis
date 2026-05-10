@@ -16,6 +16,8 @@
 //                        + wrong-provider
 //   submit_completion  — happy (Started → Completed) + zero-proof
 //                        + Funded-state-rejected
+//   confirm_completion — happy (payout + fee, vault & job closed)
+//                        + Funded-state-rejected
 
 import { createHash, randomBytes } from "node:crypto";
 
@@ -85,6 +87,23 @@ const fundSol = async (
 
 const errMsg = (err: unknown): string =>
   err instanceof Error ? `${err.message}` : `${err}`;
+
+/**
+ * Read an SPL TokenAccount's balance via bankrun's `banksClient` directly,
+ * bypassing the `BankrunConnectionProxy` which throws on missing accounts.
+ * Returns 0 if the account doesn't exist (the caller can assert presence
+ * separately).
+ */
+const fetchTokenBalance = async (
+  context: ProgramTestContext,
+  ata: PublicKey,
+): Promise<bigint> => {
+  const info = await context.banksClient.getAccount(ata);
+  if (!info) return 0n;
+  // SPL TokenAccount layout: 32-byte mint, 32-byte owner, then 8-byte
+  // little-endian amount at offset 64.
+  return Buffer.from(info.data).readBigUInt64LE(64);
+};
 
 describe("apis_program", () => {
   let context: ProgramTestContext;
@@ -321,11 +340,12 @@ describe("apis_program", () => {
         .signers([bob])
         .rpc();
 
-      // Advance the chain so the next tx (identical signer/accounts/args)
-      // doesn't tie its signature to the same blockhash as the first
-      // call. Without this, Solana's replay-protection rejects the dup
-      // as "already processed" before our `init` constraint fires.
-      await fundSol(bankrunProvider, bob.publicKey, 0.001);
+      // Advance the chain with a unique-by-recipient tx so the next
+      // call's recent_blockhash differs and Solana's replay-protection
+      // doesn't reject the dup as "already processed" before our
+      // `init` constraint fires.
+      const [throwaway] = makeKeypairs(1);
+      await fundSol(bankrunProvider, throwaway.publicKey, 0.001);
 
       // Second must fail — Anchor's `init` constraint prevents re-creating
       // an existing PDA. Surfaces from the system program as
@@ -628,9 +648,10 @@ describe("apis_program", () => {
       // The previous test sent an identical tx (same signer, same
       // accounts, same args). Solana's replay protection would reject
       // a second copy as "already processed" before the program even
-      // runs. Advance the chain with a throwaway SOL transfer so this
-      // tx hashes differently.
-      await fundSol(bankrunProvider, providerOwner.publicKey, 0.001);
+      // runs. Send a SOL transfer to a fresh keypair so this test's
+      // tx is guaranteed to hash differently from the happy one.
+      const [throwaway] = makeKeypairs(1);
+      await fundSol(bankrunProvider, throwaway.publicKey, 0.001);
 
       try {
         await program.methods
@@ -889,6 +910,271 @@ describe("apis_program", () => {
       } catch (err) {
         const m = errMsg(err);
         assert.match(m, /JobNotStarted/, `expected JobNotStarted, got: ${m}`);
+      }
+    });
+  });
+
+  // ────────────────────────────────────────────────────────────
+  // confirm_completion — release escrow, close vault + job (W2-1e)
+  // ────────────────────────────────────────────────────────────
+
+  describe("confirm_completion", () => {
+    let buyer: anchor.web3.Keypair;
+    let providerOwner: anchor.web3.Keypair;
+    let providerPda: PublicKey;
+    let buyerUsdcAta: PublicKey;
+    let treasuryPubkey: PublicKey;
+    let feeBps: number;
+    const configPda = findConfigPda();
+
+    // Two pre-set-up jobs:
+    //   jobCompleted — through full lifecycle to Completed; happy test
+    //                  consumes this one.
+    //   jobFunded    — only created; for JobNotCompleted test.
+    let jobPdaCompleted: PublicKey;
+    let escrowVaultCompleted: PublicKey;
+    let jobPdaFunded: PublicKey;
+
+    before(async () => {
+      [buyer, providerOwner] = makeKeypairs(2);
+      await fundSol(bankrunProvider, buyer.publicKey);
+      await fundSol(bankrunProvider, providerOwner.publicKey);
+
+      providerPda = findProviderPda(providerOwner.publicKey);
+      await program.methods
+        .registerProvider(
+          [...sha256("RTX 4090 / confirm_completion test")],
+          [...sha256("wss://confirm-test.example.com")],
+        )
+        .accountsPartial({
+          authority: providerOwner.publicKey,
+          provider: providerPda,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([providerOwner])
+        .rpc();
+
+      buyerUsdcAta = await fundUsdc(buyer.publicKey, 100_000_000);
+
+      // Read treasury + fee from config (set in initialize_config happy test).
+      const cfg = await program.account.globalConfig.fetch(configPda);
+      treasuryPubkey = cfg.treasury;
+      feeBps = cfg.feeBps;
+
+      // Pre-create the provider + treasury USDC ATAs (with 0 balance)
+      // so the `init_if_needed` constraints in confirm_completion are
+      // no-ops. Bankrun's connection proxy has trouble surfacing
+      // freshly-init-if-needed'd ATAs to subsequent getAccount calls;
+      // pre-creating works around that without changing program
+      // behavior (the constraints accept either path: existing or new).
+      await fundUsdc(providerOwner.publicKey, 0);
+      await fundUsdc(treasuryPubkey, 0);
+
+      // jobCompleted: full lifecycle to Completed.
+      const idCompleted = new BN(randomBytes(8));
+      jobPdaCompleted = findJobPda(buyer.publicKey, idCompleted);
+      escrowVaultCompleted = getAssociatedTokenAddressSync(
+        paymentMint,
+        jobPdaCompleted,
+        true,
+        TOKEN_PROGRAM_ID,
+      );
+      await program.methods
+        .createJob(
+          idCompleted,
+          [...sha256("completed-state job")],
+          new BN(600),
+          new BN(1_000_000),
+        )
+        .accountsPartial({
+          buyer: buyer.publicKey,
+          config: configPda,
+          provider: providerPda,
+          usdcMint: paymentMint,
+          buyerUsdcAta,
+          job: jobPdaCompleted,
+          escrowVault: escrowVaultCompleted,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([buyer])
+        .rpc();
+      await program.methods
+        .acceptJob()
+        .accountsPartial({
+          authority: providerOwner.publicKey,
+          provider: providerPda,
+          job: jobPdaCompleted,
+        })
+        .signers([providerOwner])
+        .rpc();
+      await program.methods
+        .submitCompletion([...sha256("happy result hash")])
+        .accountsPartial({
+          authority: providerOwner.publicKey,
+          provider: providerPda,
+          job: jobPdaCompleted,
+        })
+        .signers([providerOwner])
+        .rpc();
+
+      // jobFunded: created only.
+      const idFunded = new BN(randomBytes(8));
+      jobPdaFunded = findJobPda(buyer.publicKey, idFunded);
+      const vaultFunded = getAssociatedTokenAddressSync(
+        paymentMint,
+        jobPdaFunded,
+        true,
+        TOKEN_PROGRAM_ID,
+      );
+      await program.methods
+        .createJob(
+          idFunded,
+          [...sha256("funded-state job for confirm test")],
+          new BN(600),
+          new BN(1_000_000),
+        )
+        .accountsPartial({
+          buyer: buyer.publicKey,
+          config: configPda,
+          provider: providerPda,
+          usdcMint: paymentMint,
+          buyerUsdcAta,
+          job: jobPdaFunded,
+          escrowVault: vaultFunded,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([buyer])
+        .rpc();
+    });
+
+    it("happy: payout + fee transfers; vault and Job both closed", async () => {
+      const price = 1_000_000n;
+      const fee = (price * BigInt(feeBps)) / 10_000n;
+      const payout = price - fee;
+
+      const providerAta = getAssociatedTokenAddressSync(
+        paymentMint,
+        providerOwner.publicKey,
+        false,
+        TOKEN_PROGRAM_ID,
+      );
+      const treasuryAta = getAssociatedTokenAddressSync(
+        paymentMint,
+        treasuryPubkey,
+        false,
+        TOKEN_PROGRAM_ID,
+      );
+
+      // Pre-check: vault holds the price.
+      const vaultBefore = await fetchTokenBalance(
+        context,
+        escrowVaultCompleted,
+      );
+      assert.equal(vaultBefore.toString(), price.toString());
+
+      await program.methods
+        .confirmCompletion()
+        .accountsPartial({
+          buyer: buyer.publicKey,
+          config: configPda,
+          job: jobPdaCompleted,
+          provider: providerPda,
+          providerAuthority: providerOwner.publicKey,
+          treasury: treasuryPubkey,
+          usdcMint: paymentMint,
+          escrowVault: escrowVaultCompleted,
+          providerUsdcAta: providerAta,
+          treasuryUsdcAta: treasuryAta,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([buyer])
+        .rpc();
+
+      // Provider got `payout` (price - fee).
+      const providerAtaAfter = await fetchTokenBalance(context, providerAta);
+      assert.equal(
+        providerAtaAfter.toString(),
+        payout.toString(),
+        "provider ATA should hold (price - fee)",
+      );
+
+      // Treasury got `fee`.
+      const treasuryAtaAfter = await fetchTokenBalance(context, treasuryAta);
+      assert.equal(
+        treasuryAtaAfter.toString(),
+        fee.toString(),
+        "treasury ATA should hold fee",
+      );
+
+      // Vault account closed (rent → buyer).
+      const vaultInfo = await context.banksClient.getAccount(
+        escrowVaultCompleted,
+      );
+      assert.isNull(vaultInfo, "escrow vault should be closed");
+
+      // Job account closed (rent → buyer).
+      try {
+        await program.account.job.fetch(jobPdaCompleted);
+        assert.fail("expected Job account to be closed");
+      } catch {
+        // Anchor throws when the account doesn't exist — expected.
+      }
+    });
+
+    it("malicious: confirm on a Funded job → JobNotCompleted", async () => {
+      const escrowVaultFunded = getAssociatedTokenAddressSync(
+        paymentMint,
+        jobPdaFunded,
+        true,
+        TOKEN_PROGRAM_ID,
+      );
+      const providerAta = getAssociatedTokenAddressSync(
+        paymentMint,
+        providerOwner.publicKey,
+        false,
+        TOKEN_PROGRAM_ID,
+      );
+      const treasuryAta = getAssociatedTokenAddressSync(
+        paymentMint,
+        treasuryPubkey,
+        false,
+        TOKEN_PROGRAM_ID,
+      );
+
+      try {
+        await program.methods
+          .confirmCompletion()
+          .accountsPartial({
+            buyer: buyer.publicKey,
+            config: configPda,
+            job: jobPdaFunded,
+            provider: providerPda,
+            providerAuthority: providerOwner.publicKey,
+            treasury: treasuryPubkey,
+            usdcMint: paymentMint,
+            escrowVault: escrowVaultFunded,
+            providerUsdcAta: providerAta,
+            treasuryUsdcAta: treasuryAta,
+            tokenProgram: TOKEN_PROGRAM_ID,
+            associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+            systemProgram: SystemProgram.programId,
+          })
+          .signers([buyer])
+          .rpc();
+        assert.fail("expected JobNotCompleted");
+      } catch (err) {
+        const m = errMsg(err);
+        assert.match(
+          m,
+          /JobNotCompleted/,
+          `expected JobNotCompleted, got: ${m}`,
+        );
       }
     });
   });
