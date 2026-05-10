@@ -12,6 +12,8 @@
 //   register_provider — happy + duplicate-PDA + zero-hash
 //   create_job        — happy (locks USDC) + zero-spec_hash
 //                       + zero-deadline + zero-price
+//   accept_job        — happy (Funded → Started) + double-accept
+//                       + wrong-provider
 
 import { createHash, randomBytes } from "node:crypto";
 
@@ -512,7 +514,7 @@ describe("apis_program", () => {
       }
     });
 
-    it("malicious: zero price → ApisError::ZeroPrice (6007)", async () => {
+    it("malicious: zero price → ApisError::ZeroPrice", async () => {
       const id = new BN(randomBytes(8));
       const jobPda = findJobPda(buyer.publicKey, id);
       const escrowVault = getAssociatedTokenAddressSync(
@@ -531,11 +533,186 @@ describe("apis_program", () => {
         assert.fail("expected ZeroPrice");
       } catch (err) {
         const m = errMsg(err);
-        assert.match(
-          m,
-          /ZeroPrice|0x1777|6007/,
-          `expected ZeroPrice, got: ${m}`,
-        );
+        assert.match(m, /ZeroPrice/, `expected ZeroPrice, got: ${m}`);
+      }
+    });
+  });
+
+  // ────────────────────────────────────────────────────────────
+  // accept_job — Funded → Started (W2-1c)
+  // ────────────────────────────────────────────────────────────
+
+  describe("accept_job", () => {
+    let buyer: anchor.web3.Keypair;
+    let providerOwner: anchor.web3.Keypair;
+    let providerPda: PublicKey;
+    let jobId: anchor.BN;
+    let jobPda: PublicKey;
+
+    before(async () => {
+      [buyer, providerOwner] = makeKeypairs(2);
+      await fundSol(bankrunProvider, buyer.publicKey);
+      await fundSol(bankrunProvider, providerOwner.publicKey);
+
+      providerPda = findProviderPda(providerOwner.publicKey);
+      await program.methods
+        .registerProvider(
+          [...sha256("RTX 4090 / accept_job test")],
+          [...sha256("wss://accept-test.example.com")],
+        )
+        .accountsPartial({
+          authority: providerOwner.publicKey,
+          provider: providerPda,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([providerOwner])
+        .rpc();
+
+      const buyerUsdcAta = await fundUsdc(buyer.publicKey, 10_000_000);
+      jobId = new BN(randomBytes(8));
+      jobPda = findJobPda(buyer.publicKey, jobId);
+      const escrowVault = getAssociatedTokenAddressSync(
+        paymentMint,
+        jobPda,
+        true,
+        TOKEN_PROGRAM_ID,
+      );
+
+      await program.methods
+        .createJob(
+          jobId,
+          [...sha256("accept_job spec")],
+          new BN(600),
+          new BN(1_000_000),
+        )
+        .accountsPartial({
+          buyer: buyer.publicKey,
+          config: findConfigPda(),
+          provider: providerPda,
+          usdcMint: paymentMint,
+          buyerUsdcAta,
+          job: jobPda,
+          escrowVault,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([buyer])
+        .rpc();
+    });
+
+    it("happy: Funded → Started", async () => {
+      await program.methods
+        .acceptJob()
+        .accountsPartial({
+          authority: providerOwner.publicKey,
+          provider: providerPda,
+          job: jobPda,
+        })
+        .signers([providerOwner])
+        .rpc();
+
+      const job = await program.account.job.fetch(jobPda);
+      assert.deepEqual(job.status, { started: {} });
+    });
+
+    it("malicious: double-accept (already Started) → JobNotFunded", async () => {
+      // The previous test sent an identical tx (same signer, same
+      // accounts, same args). Solana's replay protection would reject
+      // a second copy as "already processed" before the program even
+      // runs. Advance the chain with a throwaway SOL transfer so this
+      // tx hashes differently.
+      await fundSol(bankrunProvider, providerOwner.publicKey, 0.001);
+
+      try {
+        await program.methods
+          .acceptJob()
+          .accountsPartial({
+            authority: providerOwner.publicKey,
+            provider: providerPda,
+            job: jobPda,
+          })
+          .signers([providerOwner])
+          .rpc();
+        assert.fail("expected JobNotFunded");
+      } catch (err) {
+        const m = errMsg(err);
+        assert.match(m, /JobNotFunded/, `expected JobNotFunded, got: ${m}`);
+      }
+    });
+
+    it("malicious: a different provider can't accept → WrongProvider", async () => {
+      // Register a separate provider, then try to accept the job that
+      // was assigned to the original provider.
+      const [otherOwner] = makeKeypairs(1);
+      await fundSol(bankrunProvider, otherOwner.publicKey);
+      const otherPda = findProviderPda(otherOwner.publicKey);
+      await program.methods
+        .registerProvider(
+          [...sha256("interloper RTX 4080")],
+          [...sha256("wss://interloper.example.com")],
+        )
+        .accountsPartial({
+          authority: otherOwner.publicKey,
+          provider: otherPda,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([otherOwner])
+        .rpc();
+
+      // Need a fresh Funded job for the test (the existing one is
+      // Started, which would trigger JobNotFunded first).
+      const buyerUsdcAta = getAssociatedTokenAddressSync(
+        paymentMint,
+        buyer.publicKey,
+        false,
+        TOKEN_PROGRAM_ID,
+      );
+      const freshId = new BN(randomBytes(8));
+      const freshJobPda = findJobPda(buyer.publicKey, freshId);
+      const freshVault = getAssociatedTokenAddressSync(
+        paymentMint,
+        freshJobPda,
+        true,
+        TOKEN_PROGRAM_ID,
+      );
+      await program.methods
+        .createJob(
+          freshId,
+          [...sha256("fresh job for wrong-provider test")],
+          new BN(600),
+          new BN(1_000_000),
+        )
+        .accountsPartial({
+          buyer: buyer.publicKey,
+          config: findConfigPda(),
+          provider: providerPda, // job targets the ORIGINAL provider
+          usdcMint: paymentMint,
+          buyerUsdcAta,
+          job: freshJobPda,
+          escrowVault: freshVault,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([buyer])
+        .rpc();
+
+      // Other authority tries to accept it.
+      try {
+        await program.methods
+          .acceptJob()
+          .accountsPartial({
+            authority: otherOwner.publicKey,
+            provider: otherPda,
+            job: freshJobPda,
+          })
+          .signers([otherOwner])
+          .rpc();
+        assert.fail("expected WrongProvider");
+      } catch (err) {
+        const m = errMsg(err);
+        assert.match(m, /WrongProvider/, `expected WrongProvider, got: ${m}`);
       }
     });
   });
