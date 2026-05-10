@@ -142,10 +142,10 @@ export default function Home() {
         eyebrow="Permissionless · open · settled on Solana"
         title={
           <>
-            Buy AI compute.
+            Buy compute power from
             <br />
             <span className="bg-gradient-to-r from-[#14F195] via-[#14F195] to-[#9945FF] bg-clip-text text-transparent">
-              Sell idle GPUs.
+              individual GPU owners.
             </span>
           </>
         }
@@ -181,11 +181,11 @@ export default function Home() {
       <div className="relative z-10 mx-auto max-w-5xl px-6">
         <MarketplaceFlow />
 
+        <WhyApis />
+
         <NetworkGlobeSection stats={stats} />
 
         <NetworkPanel stats={stats} />
-
-        <WhyApis />
 
         <Footer />
       </div>
