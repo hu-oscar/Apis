@@ -1,41 +1,29 @@
 // GET /api/jobs/{jobPda} — combined snapshot of on-chain Job + the
-// worker's local result side-channel.
+// worker's posted result.
 //
-// The page polls this every ~3s until Job.status == Completed (5) or a
-// terminal status (Refunded=6, Slashed=7). The worker writes the IPFS
-// CID + proof_hash to /tmp/apis_results/{job_pda}.json once it finishes
-// inference; this route reads both halves and returns a single JSON the
-// client can render in one shot.
+// The /job/[id] page polls this every ~3s until Job.status reaches a
+// terminal state. After inference the worker POSTs (cid, proof_hash) to
+// /api/results/{jobPda}; this route reads both halves and returns a
+// single JSON the client can render in one shot.
 
 import { NextResponse } from "next/server";
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
 import {
   createSolanaRpc,
   type Address,
 } from "@solana/kit";
 import { fetchMaybeJob, JobStatus } from "@/app/lib/apis-program";
+import { kvGet } from "@/app/lib/kv";
 
 const RPC_URL =
   process.env.NEXT_PUBLIC_SOLANA_RPC_URL ?? "https://api.devnet.solana.com";
-const RESULT_DIR = process.env.APIS_RESULT_DIR ?? "/tmp/apis_results";
 
-export const runtime = "nodejs"; // need fs.
+export const runtime = "nodejs";
 
-type ResultFile = {
+type ResultRecord = {
   cid: string;
   proof_hash_hex: string;
   completed_at: number;
 };
-
-async function readResultFile(pda: string): Promise<ResultFile | null> {
-  try {
-    const txt = await readFile(join(RESULT_DIR, `${pda}.json`), "utf8");
-    return JSON.parse(txt) as ResultFile;
-  } catch {
-    return null;
-  }
-}
 
 export async function GET(
   _request: Request,
@@ -57,7 +45,7 @@ export async function GET(
   if (!maybeJob.exists) {
     // Likely already settled (Anchor `close = buyer` removed it). The
     // result file may still be on disk — return that with a hint.
-    const result = await readResultFile(pda);
+    const result = await kvGet<ResultRecord>("result", pda);
     return NextResponse.json({
       pda,
       onChain: null,
@@ -67,7 +55,7 @@ export async function GET(
   }
 
   const j = maybeJob.data;
-  const result = await readResultFile(pda);
+  const result = await kvGet<ResultRecord>("result", pda);
 
   return NextResponse.json({
     pda,

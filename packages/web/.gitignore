@@ -32,6 +32,9 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+# but DO commit .env.example — it's the template the deploy doc points
+# users at; it has no secrets.
+!.env.example
 
 # vercel
 .vercel
