@@ -396,65 +396,11 @@ Connect Phantom (devnet), submit a job, watch it land. The web's API
 routes fall back to `/tmp/apis_kv/` when `PINATA_JWT` is unset, so
 local-only dev needs no Pinata.
 
-### 6. Production deploy
-
-See [`packages/web/DEPLOY.md`](packages/web/DEPLOY.md) — ~5 minutes, two
-env vars (`PINATA_JWT`, `APIS_DEPLOYER_KEYPAIR`).
-
----
-
-## Status & scope
-
-This is a **hackathon MVP**. Three of the originally-planned five P0
-features ship:
-
-| Feature | Status |
-|---|---|
-| F2 — Buyer web app (Next.js + Phantom + USDC) | ✅ shipped |
-| F3 — Anchor escrow program | ✅ shipped (20 bankrun tests) |
-| F1 — Provider runtime (Python CLI worker, not Tauri) | ✅ shipped (CLI form) |
-| F4 — Agent + MCP + x402 | ❌ deferred (sub-MVP cut for time) |
-| F5 — Multi-GPU pooling | ❌ deferred (sub-MVP cut for time) |
-
-The W3 Tauri-wrapped provider desktop app and W4 agent integration are
-documented as Phase 2 deliverables in `MEMORY.md`. The marketplace
-mechanics (`create_job` / `accept_job` / `submit_completion` /
-`confirm_completion` / `cancel_job`) are fully production-shaped and
-audited against the
-[`coral-xyz/sealevel-attacks`](https://github.com/coral-xyz/sealevel-attacks)
-checklist.
-
-### What's known-broken / known-deferred
-
-- Concurrent jobs on a single worker thrash MLX/Metal on M3 Pro 18 GB
-  (~5× slowdown each). Mitigation: serialize via `asyncio.Lock` in
-  `apis_worker/listener` — flagged for W6 polish.
-- Pinata `name` index has ~200–500 ms read latency vs Redis ~10 ms.
-  Acceptable for the 3-second poll cadence in the UI.
-- Pinata pins are world-readable IPFS — devnet test prompts have no
-  PII, but flagged as a real prod regression.
-- The faucet rate-limits by on-chain balance instead of a 24h time
-  window (no external KV needed). A buyer can spend down + re-drip.
-
----
-
-## Documents
-
-For deeper detail beyond what this README covers:
-
-- [`docs/Research-Apis.md`](docs/Research-Apis.md) — competitive research, design space, why Solana / Flux Schnell / Pinata
-- [`docs/PRD-Apis-MVP.md`](docs/PRD-Apis-MVP.md) — product requirements (5 P0 features, scope cuts)
-- [`docs/TechDesign-Apis-MVP.md`](docs/TechDesign-Apis-MVP.md) — full technical design
-- [`MEMORY.md`](MEMORY.md) — running architectural decision log
-- [`AGENTS.md`](AGENTS.md) — engineering rules + agent posture (the LLM is the primary author of this repo)
-
----
-
 ## License
 
 MIT. See individual `Cargo.toml` / `package.json` for sub-package
 licenses (all permissive: MIT / Apache-2.0). Flux Schnell is Apache-2.0;
 Anchor is Apache-2.0; Pinata SDKs are MIT.
 
-Built for the **Dev3pack Solana track** during a 6-week hackathon
-window. Devnet only.
+Built for the **Dev3pack Solana track** hackathon.
+Devnet only.
