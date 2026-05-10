@@ -56,15 +56,13 @@ escrow releases, vault closes. Payment is USDC, settlement is on-chain,
 provider set is permissionless.
 
 The hackathon MVP runs on Solana devnet and uses **Flux Schnell** (Apache
-2.0) on **Apple Silicon** (MLX) as the reference inference workload — but
-the program doesn't care what the worker actually computes, only that it
-posts a hash that matches the job's spec.
+2.0) on **Apple Silicon** (MLX) as the reference inference workload.
 
 ---
 
 ## Architecture
 
-Three loosely coupled components, three external services. The Anchor
+Three coupled components, three external services. The Anchor
 program is the only piece that has to be trusted; everything else is
 swappable.
 
@@ -210,9 +208,6 @@ etc.).
 ---
 
 ## Solana SDKs in use
-
-The Solana track gives bonus points for "consistent and considerable use
-of Solana libraries and SDKs in any language." Here's the inventory.
 
 ### Anchor program (Rust)
 
