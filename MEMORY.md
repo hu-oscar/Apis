@@ -16,9 +16,13 @@ DO NOT delete historical context if it is still relevant. Compress older complet
 - ≥ 3 sponsor integrations (Solana + Virtuals + Noah AI minimum)
 - Pre-recorded demo video < 3 min showing Claude Sonnet 4.x autonomously buying 1 inference end-to-end in under 60s
 
-**Current Task:** **W1 — Foundation: pipeline end-to-end (fake)**
+**Current Task:** **W2-Step-1 done — moving to W2-Step-2 (worker = real Flux Schnell)**
 
-> Goal of W1: get a fake job to flow through Solana devnet → fake worker → fake completion event, with all 5 surfaces talking to each other in their most minimal form. No real Flux Schnell yet, no real verification yet — just prove the wiring works.
+> W1 — Foundation pipeline (fake): functionally complete. The Sun W1 checkpoint demo (Step 8) is integration-only — all three pieces (program, web `/submit`, Python worker) are independently verified on devnet.
+>
+> W2-Step-1 — full escrow lifecycle on-chain: complete. `apis_program` deployed to devnet at the same ID with the W2 binary; full lifecycle tested via 20 bankrun tests (≥1 happy + ≥1 malicious-input per instruction).
+>
+> Next: W2-Step-2 (Python worker runs real Flux Schnell NF4 + uploads to IPFS + calls submit_completion) and W2-Step-3 (web `/submit` actually pays USDC + new `/job/[id]` result page; Codama regen lands here).
 
 **Next Steps (W1 — Foundation):**
 1. ✅ Repo cloned and synced locally (done 2026-05-09)
@@ -34,6 +38,23 @@ DO NOT delete historical context if it is still relevant. Compress older complet
 6. ✅ **Web app v0.1** (done 2026-05-10): `/submit` page wallet-gated by `useWalletConnection`. Self-register flow — buyer first registers a `Provider` PDA against their own wallet (stub gpu_specs_hash + endpoint_uri_hash for W1), then submits a `create_job` tx with `sha256(prompt)` as `spec_hash` and a 600s deadline. Codama-generated TS client at `packages/web/app/lib/generated/apis-program/`; barrel re-export at `app/lib/apis-program.ts`. End-to-end verified on devnet with Phantom wallet `BhTNfGu3amwVFJwykYSPzVgC6xnLnNxPtbxwYiLDsgGM`: both `register_provider` and `create_job` confirmed on Solana Explorer.
 7. ✅ **Worker v0.1** (done 2026-05-10): Python `apis_worker` package at `packages/worker/`. Subscribes to devnet via WebSocket (`logsSubscribe` mentions filter on `apis_program`), decodes `Program data:` log lines as Anchor events using borsh layouts mirrored from `programs/apis_program/src/events.rs`. Discriminators are loaded at startup from the on-chain IDL so rebuilds stay in sync. Verified on devnet: a fresh `create_job` tx from `/submit` produced a single-line `JobCreated tx=… job=… buyer=… provider=… spec_hash=… …` log within ~1 second. **Skipped anchorpy** (0.21.0 predates Anchor 1.0 IDL format) — using `borsh-construct` directly.
 8. ⏳ **Sun W1 checkpoint:** submit fake job from web → tx on devnet explorer → worker logs receipt (Steps 5+6+7 are integrated; checkpoint = run all three live for the demo recording).
+
+**Next Steps (W2 — Core marketplace: real escrow + Flux Schnell):**
+
+W2-Step-1 (smart contract — full escrow lifecycle):
+- 1a. ✅ `GlobalConfig` PDA + `initialize_config` (done 2026-05-10)
+- 1b. ✅ `create_job` locks USDC into per-job EscrowVault (done 2026-05-10)
+- 1c. ✅ `accept_job` (Funded → Started) (done 2026-05-10)
+- 1d. ✅ `submit_completion` (Started → Completed; sets proof_hash) (done 2026-05-10)
+- 1e. ✅ `confirm_completion` (releases USDC → provider+treasury; closes vault+job) (done 2026-05-10)
+- 1f. ✅ `cancel_job` (full refund pre-accept; closes vault+job) (done 2026-05-10)
+- 1g. ✅ Devnet redeploy + IDL on-chain refresh (done 2026-05-10) — **same program ID** `2qe8YXciSpony5vjwxZAYJZ7WfRzSHKRdRzSiH868mhf`, upgraded in place. Binary 160K → 321K. IDL refreshed via `program-metadata write idl … --keypair ~/.config/solana/id.json`. Pre-deploy required `solana program extend` (200KB additional allocation) + Phantom→deployer SOL top-up (devnet faucet was rate-limited).
+
+W2-Step-2 (worker): ⏳ install PyTorch + diffusers + bitsandbytes; integrate Flux.1 Schnell NF4 inference; sign result hash; upload to Pinata IPFS; call `submit_completion` via solana-py.
+
+W2-Step-3 (web app): ⏳ regenerate Codama from W2 IDL; rewrite `/submit` to take a price + open EscrowVault + transfer real USDC; add `/job/[id]` result page that streams Job state + renders the IPFS image.
+
+W2-Step-4 (Sun W2 checkpoint): ⏳ end-to-end live demo — buyer pays real (devnet) USDC, provider runs real Flux Schnell on a real GPU, image lands back via IPFS, settlement closes the vault.
 
 **Fallback rule (per Tech Design §4):** if Sun W1 checkpoint isn't met, +3 days buffer; if still stuck after that, drop to MVP-minimal (3 features only — F1 + F2 + F3, drop F4 + F5 to stretch).
 
@@ -68,6 +89,12 @@ DO NOT delete historical context if it is still relevant. Compress older complet
 - **2026-05-10** — **`ui-ux-pro-max-skill` installed at `.agents/skills/ui-ux-pro-max-skill/`** (MIT, https://github.com/nextlevelbuilder/ui-ux-pro-max-skill). Auto-loaded mid-session and registered 7 sub-skills (`ui-ux-pro-max`, `design`, `banner-design`, `brand`, `slides`, `ui-styling`, `design-system`) for design guidance going forward. Not yet pinned in `skills-lock.json` — the lock-file format expects a single `SKILL.md` path; this skill uses a different structure.
 - **2026-05-10** — **Worker = static borsh layouts + IDL-derived discriminators, not anchorpy.** anchorpy 0.21.0 (latest stable) predates Anchor 1.0's IDL format change so it can't load `apis_program.json`. We hand-roll the JobCreated/ProviderRegistered borsh structs in `apis_worker/decoder.py` (mirroring `programs/apis_program/src/events.rs`) and read the discriminators from the IDL at startup. If anchorpy ships Anchor 1.0 support before W2, swap the decoder layer.
 - **2026-05-10** — **Worker subscribes via public `wss://api.devnet.solana.com` for W1.** Helius enhanced WebSocket is the post-W1 default (per Tech Design §3) but adds an env-var dependency. `APIS_RPC_WS` / `APIS_RPC_HTTP` env vars override the public endpoint without code changes when the Helius API key is wired up.
+- **2026-05-10** — **W2-Step-1 closed: full on-chain escrow lifecycle live on devnet.** apis_program now exposes `initialize_config` + `create_job` (with USDC locking) + `accept_job` + `submit_completion` + `confirm_completion` + `cancel_job` (W2 additions) on top of the W1 `register_provider`. Settles via `transfer_checked` to a per-job `EscrowVault` (ATA at `[b"vault", job]`, authority = Job PDA). Fee math: `fee = price * fee_bps / 10_000` to `config.treasury`; `payout = price - fee` to `provider.authority`'s USDC ATA. Vault + Job both closed at settlement (rent → buyer). 20 bankrun tests passing — ≥1 happy + ≥1 malicious-input per instruction.
+- **2026-05-10** — **`init_if_needed` for provider + treasury USDC ATAs in `confirm_completion`.** Lets buyers settle even if the provider/treasury has never held USDC before — buyer pays the rent for any newly-created ATAs. Trade-off: buyers eat the ATA rent on first-confirm-per-recipient (~0.002 SOL each); acceptable for hackathon scope. W3+ may add an explicit `bootstrap_provider` instruction if this becomes a UX issue.
+- **2026-05-10** — **`Box<Account<…>>` for `confirm_completion`'s heavy SPL accounts.** Without boxing, the 12-account context overflows BPF's 4096-byte try_accounts stack frame by ~400 bytes (caught at build time via the SBF stack-offset warning). Boxed: `usdc_mint`, `escrow_vault`, `provider_usdc_ata`, `treasury_usdc_ata`. Pattern to remember when adding more accounts in W3.
+- **2026-05-10** — **Bankrun connection-proxy quirk: use `context.banksClient.getAccount` directly for SPL token reads.** `BankrunConnectionProxy.getAccountInfo` (used internally by `getAccount` from `@solana/spl-token`) throws "Could not find" on freshly-`init_if_needed`'d ATAs, even when the underlying account does exist. Workaround: a `fetchTokenBalance(context, ata)` helper in the test file reads via banksClient directly + parses the SPL TokenAccount layout (amount at offset 64, u64 LE).
+- **2026-05-10** — **Bankrun replay-protection workaround in tests: `setComputeUnitLimit({units: 200_001})` pre-instruction.** When two consecutive tests submit identical txs (same signer/accounts/args), Solana rejects the second as "transaction has already been processed" before the program runs. State-advancing transfers between tests don't reliably differentiate the txs. Adding a no-op `ComputeBudgetProgram.setComputeUnitLimit` pre-ix on the second tx changes its structure → different signature → no replay rejection. Used in `register_provider` duplicate-PDA + `accept_job` double-accept tests.
+- **2026-05-10** — **Devnet program-metadata IDL refresh via `program-metadata write idl … --keypair`.** Anchor 1.0 CLI's `anchor idl init` and `anchor idl upgrade` both fail when the existing IDL metadata account is undersized for a larger new IDL (W1 IDL = 3.7KB, W2 IDL = 49KB). The standalone `@solana-program/program-metadata` CLI handles realloc — but **only when invoked with `--keypair ~/.config/solana/id.json` explicitly**; without it, the operation reports a generic "transaction plan failed" error. Documented for future redeploys.
 
 ## 🐛 Known Issues & Quirks
 
@@ -83,6 +110,8 @@ DO NOT delete historical context if it is still relevant. Compress older complet
 - **Solana CLI 3.1.15 is not in AVM's release archive** (only the system installer has it). Anchor 1.0.2 falls back to the AVM-cached **3.1.8** when `[toolchain] solana_version = "3.1.15"` is set. **Mitigation:** pin `solana_version = "3.1.8"` in `Anchor.toml` until AVM publishes 3.1.15. Migration guide §0 recommends 3.1.10+, but 3.1.8 works fine with Anchor 1.0.2 in practice (verified end-to-end: build, test, devnet deploy).
 - **`packages/program` is excluded from the pnpm workspace** (per `pnpm-workspace.yaml` comment — "Anchor manages its own JS deps"). Running `pnpm install` from inside the package without `--ignore-workspace` is a no-op. **Use `pnpm install --ignore-workspace`** in `packages/program/` to install the test runner / Anchor TS client deps.
 - **Root `.gitignore` had a too-broad `lib/` rule** (Python virtualenv convention) that masked `packages/web/app/lib/`. Anchored to `/lib/` and `/lib64/` (repo root only) on 2026-05-10 — the framework's `app/lib/` and similar dirs are tracked again.
+- **Anchor 1.0 program upgrades require pre-extension when the new binary is bigger than the on-chain ProgramData allocation.** `anchor program deploy` errors with "ProgramData account not large enough"; fix is `solana program extend <PROGRAM_ID> <ADDITIONAL_BYTES>` first. Also, the upgrade allocates a temporary write-buffer account whose rent (~$2.24 SOL for our 321KB binary) must be paid up front by the deployer; rent is refunded after the swap. Devnet faucet rate limits (2 airdrops / 8h / IP) can leave the deployer wallet under-funded mid-upgrade — workaround = top up from Phantom (devnet) via in-wallet "Send" to the deployer pubkey.
+- **Anchor 1.0 `anchor idl init`/`upgrade` fail on size-grew IDL accounts.** Use `npm install -g @solana-program/program-metadata` then `program-metadata write idl <PROGRAM_ID> target/idl/apis_program.json --rpc <RPC> --keypair ~/.config/solana/id.json` instead. The `--keypair` flag is mandatory — without it the CLI reports a generic "transaction plan failed" error.
 
 ## 📜 Completed Phases
 
@@ -94,7 +123,9 @@ DO NOT delete historical context if it is still relevant. Compress older complet
 - [x] **2026-05-09** — **W1 Step 5 done:** `apis_program` v0.1 deployed to devnet (`2qe8YXciSpony5vjwxZAYJZ7WfRzSHKRdRzSiH868mhf`); `register_provider` + `create_job` + 2 events; 6/6 tests passing; IDL on-chain via Program Metadata.
 - [x] **2026-05-10** — **W1 Step 6 done:** `/submit` page (Next.js 16 + React 19 + `@solana/react-hooks` + Codama-generated TS client + framer-motion + Cyberpunk Swarm theming). Phantom on devnet → register_provider → create_job → Job PDA visible on Explorer.
 - [x] **2026-05-10** — **W1 Step 7 done:** Python worker (`apis_worker`) subscribes to devnet via WebSocket (`logsSubscribe`), decodes `JobCreated` + `ProviderRegistered` events via static borsh layouts + IDL-derived discriminators. Verified end-to-end against a fresh `/submit` job.
-- [ ] **W1 — Foundation: pipeline end-to-end (fake)** ← *Step 8 remaining (Sun W1 demo: web → devnet → worker live in one shot)*
+- [x] **2026-05-10** — **W2-Step-1 done:** full escrow lifecycle on-chain — `initialize_config` + USDC-locking `create_job` + `accept_job` + `submit_completion` + `confirm_completion` (payout + fee, vault & job closed) + `cancel_job` (refund + close). 20 bankrun tests passing. Deployed in-place to devnet at `2qe8YXciSpony5vjwxZAYJZ7WfRzSHKRdRzSiH868mhf` (binary 160K → 321K). On-chain IDL refreshed via `@solana-program/program-metadata` CLI. Codama regen + `/submit` rewrite intentionally bundled with W2-Step-3.
+- [ ] **W1 — Foundation: pipeline end-to-end (fake)** ← *Step 8 (live demo recording) remaining; functionally complete*
+- [ ] **W2 — Core marketplace: real escrow + Flux Schnell on real GPU** ← *Step 1 done; Steps 2 (worker), 3 (web), 4 (checkpoint) remaining*
 - [ ] **W2 — Core marketplace: real escrow + Flux Schnell on real GPU**
 - [ ] **W3 — Pooling + verification (signatures + spot checks + slashing)**
 - [ ] **W4 — Agent + MCP + x402 (the wow demo)** — **HARD NO-GO DATE**
