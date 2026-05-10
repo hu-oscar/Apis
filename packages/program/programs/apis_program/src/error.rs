@@ -22,4 +22,7 @@ pub enum ApisError {
     /// `create_job`: deadline_offset_secs was non-positive.
     #[msg("deadline must be in the future")]
     InvalidDeadline,
+    /// `initialize_config`: fee_bps was > 10_000 (100%).
+    #[msg("fee_bps must be <= 10000 (100%)")]
+    FeeBpsTooHigh,
 }

@@ -1,4 +1,5 @@
 pub mod create_job;
+pub mod initialize_config;
 pub mod register_provider;
 
 // Glob re-exports — pull every public item from each instruction module
@@ -11,4 +12,5 @@ pub mod register_provider;
 // Per-module handler functions are named `<ix_name>_handler` to avoid
 // collision when both modules glob-re-export.
 pub use create_job::*;
+pub use initialize_config::*;
 pub use register_provider::*;

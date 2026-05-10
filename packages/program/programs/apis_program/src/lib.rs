@@ -33,6 +33,17 @@ declare_id!("2qe8YXciSpony5vjwxZAYJZ7WfRzSHKRdRzSiH868mhf");
 pub mod apis_program {
     use super::*;
 
+    /// Initialize the singleton GlobalConfig (one-shot). The caller becomes
+    /// `admin` and `treasury`; `usdc_mint` and `fee_bps` are caller-supplied.
+    /// W3 levers (bond/dispute/slash) default to 0.
+    pub fn initialize_config(
+        ctx: Context<InitializeConfig>,
+        usdc_mint: Pubkey,
+        fee_bps: u16,
+    ) -> Result<()> {
+        initialize_config_handler(ctx, usdc_mint, fee_bps)
+    }
+
     /// Register a GPU provider account. The PDA `init` constraint enforces
     /// single-Provider-per-authority — a duplicate call from the same
     /// authority fails with `already in use`.
