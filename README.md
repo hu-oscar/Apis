@@ -15,7 +15,7 @@ workers pick them up, escrow releases on proof of completion.
 | | |
 |---|---|
 | **Live web app** | <https://apis-web-five.vercel.app> |
-| **Demo video (≤ 3 min)** | [_to be added in W5 polish_](https://drive.google.com/file/d/1Ve944QlXY6CNj4oRqKGkLRuobA8KF9Gi/view?usp=sharing) |
+| **Demo video (≤ 3 min)** | https://drive.google.com/file/d/1Ve944QlXY6CNj4oRqKGkLRuobA8KF9Gi/view?usp=sharing |
 | **GitHub** | <https://github.com/hu-oscar/Apis> |
 | | |
 | Anchor program | [`2qe8YXciSpony5vjwxZAYJZ7WfRzSHKRdRzSiH868mhf`](https://explorer.solana.com/address/2qe8YXciSpony5vjwxZAYJZ7WfRzSHKRdRzSiH868mhf?cluster=devnet) |
