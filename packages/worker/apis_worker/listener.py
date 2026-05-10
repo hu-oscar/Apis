@@ -10,6 +10,7 @@ import base64
 import hashlib
 import logging
 
+import websockets.exceptions
 from solana.rpc.websocket_api import connect
 from solders.keypair import Keypair
 from solders.pubkey import Pubkey
@@ -37,9 +38,23 @@ def _find_provider_pda(authority: Pubkey, program_id: Pubkey) -> Pubkey:
     return pda
 
 
+# Reconnect backoff: 1s → 2s → 4s → 8s → 16s, capped at 30s. Reset on a
+# successful subscription. Devnet RPCs drop idle subscriptions on a
+# variable schedule, so we re-establish on every error and keep going.
+_RECONNECT_INITIAL_BACKOFF_S = 1.0
+_RECONNECT_MAX_BACKOFF_S = 30.0
+
+
 async def listen_for_jobs() -> None:
     """Connect to devnet, subscribe to apis_program logs, decode events,
-    and run the full inference pipeline for jobs assigned to us."""
+    and run the full inference pipeline for jobs assigned to us.
+
+    Resilient to WebSocket drops: on `ConnectionClosed*` (devnet RPCs
+    routinely drop idle subs after a few minutes) we re-connect and
+    re-subscribe with exponential backoff. Inflight `_process_job` tasks
+    are unaffected because they're spawned via `asyncio.create_task` and
+    do their own RPC over HTTP, not the WS subscription.
+    """
     program_id = Pubkey.from_string(APIS_PROGRAM_ID)
     decoders = load_event_decoders()
 
@@ -54,23 +69,49 @@ async def listen_for_jobs() -> None:
     )
     log.info("worker authority:  %s", worker_keypair.pubkey())
     log.info("worker provider:   %s", our_provider_pda)
-    log.info("connecting to %s", RPC_WS_URL)
-    log.info("subscribing to logs mentioning %s", APIS_PROGRAM_ID)
 
-    async with connect(RPC_WS_URL) as ws:
-        await ws.logs_subscribe(
-            filter_=RpcTransactionLogsFilterMentions(program_id),
-            commitment="confirmed",
-        )
-        first = await ws.recv()
-        sub_id = first[0].result
-        log.info("subscribed (id=%s); waiting for jobs…", sub_id)
-
-        async for batch in ws:
-            for msg in batch:
-                await _handle_log_message(
-                    msg, decoders, worker_keypair, our_provider_pda_bytes
+    backoff = _RECONNECT_INITIAL_BACKOFF_S
+    while True:
+        try:
+            log.info("connecting to %s", RPC_WS_URL)
+            async with connect(RPC_WS_URL) as ws:
+                await ws.logs_subscribe(
+                    filter_=RpcTransactionLogsFilterMentions(program_id),
+                    commitment="confirmed",
                 )
+                first = await ws.recv()
+                sub_id = first[0].result
+                log.info("subscribed (id=%s); waiting for jobs…", sub_id)
+                # Successful subscription — reset the backoff so the next
+                # disconnect retries quickly.
+                backoff = _RECONNECT_INITIAL_BACKOFF_S
+
+                async for batch in ws:
+                    for msg in batch:
+                        await _handle_log_message(
+                            msg, decoders, worker_keypair, our_provider_pda_bytes
+                        )
+                # `async for` exits cleanly only if the server closed
+                # gracefully. Treat as a transient drop + retry.
+                log.warning("WS stream ended cleanly; reconnecting…")
+        except (
+            websockets.exceptions.ConnectionClosed,
+            websockets.exceptions.WebSocketException,
+            asyncio.IncompleteReadError,
+            ConnectionError,
+            OSError,
+        ) as exc:
+            log.warning(
+                "WS error (%s: %s); reconnecting in %.1fs",
+                type(exc).__name__,
+                exc,
+                backoff,
+            )
+        except asyncio.CancelledError:
+            log.info("listener cancelled; shutting down")
+            raise
+        await asyncio.sleep(backoff)
+        backoff = min(backoff * 2, _RECONNECT_MAX_BACKOFF_S)
 
 
 async def _handle_log_message(
