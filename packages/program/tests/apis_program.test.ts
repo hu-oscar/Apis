@@ -1,11 +1,13 @@
-// W1 test suite for apis_program: register_provider + create_job + 2 events.
+// Test suite for apis_program — W1 instructions (register_provider,
+// create_job) plus W2's initialize_config (rest of the W2 escrow
+// lifecycle lands as further describe() blocks in subsequent commits).
 //
 // Uses solana-bankrun (in-process validator) — no surfpool, no
-// solana-test-validator required. Ordered: 1 happy + 4 malicious-input,
-// per AGENTS.md "every instruction has a happy-path + at least one
-// malicious-input test."
+// solana-test-validator required. Per AGENTS.md, every instruction has
+// a happy-path + at least one malicious-input test.
 //
 // Coverage:
+//   initialize_config — fee-bps-bound + happy + duplicate-init
 //   register_provider — happy + duplicate-PDA + zero-hash
 //   create_job        — happy + zero-spec_hash + zero-deadline
 
@@ -28,6 +30,9 @@ const PROGRAM_ID = new PublicKey(IDL.address);
 const ZERO_HASH = new Uint8Array(32);
 
 const sha256 = (s: string): Buffer => createHash("sha256").update(s).digest();
+
+const findConfigPda = (): PublicKey =>
+  PublicKey.findProgramAddressSync([Buffer.from("config")], PROGRAM_ID)[0];
 
 const findProviderPda = (authority: PublicKey): PublicKey =>
   PublicKey.findProgramAddressSync(
@@ -59,7 +64,7 @@ const fundSol = async (
 const errMsg = (err: unknown): string =>
   err instanceof Error ? `${err.message}` : `${err}`;
 
-describe("apis_program (W1)", () => {
+describe("apis_program", () => {
   let context: ProgramTestContext;
   let bankrunProvider: BankrunProvider;
   let program: anchor.Program<ApisProgram>;
@@ -75,6 +80,101 @@ describe("apis_program (W1)", () => {
       IDL as ApisProgram,
       bankrunProvider,
     );
+  });
+
+  // ────────────────────────────────────────────────────────────
+  // initialize_config — singleton GlobalConfig PDA
+  //
+  // Test order matters: the malicious "fee_bps > 10_000" case must run
+  // BEFORE the happy path. After happy creates the config, the `init`
+  // constraint blocks every subsequent attempt with "already in use" —
+  // the require!() inside the handler never gets a chance to fire.
+  // ────────────────────────────────────────────────────────────
+
+  describe("initialize_config", () => {
+    const configPda = findConfigPda();
+    // Synthetic mint pubkey — only used as a stored Pubkey value, no
+    // actual mint account needs to exist for initialize_config.
+    const [fakeUsdcMintKp] = makeKeypairs(1);
+    const fakeUsdcMint = fakeUsdcMintKp.publicKey;
+
+    it("malicious: fee_bps > 10_000 → ApisError::FeeBpsTooHigh (6005)", async () => {
+      // Runs first (see describe-block comment). Config doesn't exist
+      // yet — the `init` succeeds, then the handler's require!() trips.
+      const [tooGreedy] = makeKeypairs(1);
+      await fundSol(bankrunProvider, tooGreedy.publicKey);
+
+      try {
+        await program.methods
+          .initializeConfig(fakeUsdcMint, 10_001)
+          .accountsPartial({
+            admin: tooGreedy.publicKey,
+            config: configPda,
+            systemProgram: SystemProgram.programId,
+          })
+          .signers([tooGreedy])
+          .rpc();
+        assert.fail("expected FeeBpsTooHigh");
+      } catch (err) {
+        const m = errMsg(err);
+        assert.match(
+          m,
+          /FeeBpsTooHigh|0x1775|6005/,
+          `expected FeeBpsTooHigh, got: ${m}`,
+        );
+      }
+    });
+
+    it("happy path: first caller becomes admin + treasury; W3 fields zeroed", async () => {
+      const [admin] = makeKeypairs(1);
+      await fundSol(bankrunProvider, admin.publicKey);
+
+      await program.methods
+        .initializeConfig(fakeUsdcMint, 50) // 0.5%
+        .accountsPartial({
+          admin: admin.publicKey,
+          config: configPda,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([admin])
+        .rpc();
+
+      const cfg = await program.account.globalConfig.fetch(configPda);
+      assert.isTrue(cfg.admin.equals(admin.publicKey));
+      assert.isTrue(cfg.treasury.equals(admin.publicKey));
+      assert.isTrue(cfg.usdcMint.equals(fakeUsdcMint));
+      assert.equal(cfg.feeBps, 50);
+      // W3 fields default to zero in W2.
+      assert.equal(cfg.minBondLamports.toNumber(), 0);
+      assert.equal(cfg.disputeWindowSecs.toNumber(), 0);
+      assert.equal(cfg.slashSplitBps, 0);
+      assert.equal(cfg.paused, false);
+    });
+
+    it("malicious: re-initializing fails (PDA already in use)", async () => {
+      const [imposter] = makeKeypairs(1);
+      await fundSol(bankrunProvider, imposter.publicKey);
+
+      try {
+        await program.methods
+          .initializeConfig(fakeUsdcMint, 100)
+          .accountsPartial({
+            admin: imposter.publicKey,
+            config: configPda,
+            systemProgram: SystemProgram.programId,
+          })
+          .signers([imposter])
+          .rpc();
+        assert.fail("expected re-initialize to fail");
+      } catch (err) {
+        const m = errMsg(err);
+        assert.match(
+          m,
+          /already in use|0x0|account.*already|custom program error: 0x0/i,
+          `expected init/already-in-use error, got: ${m}`,
+        );
+      }
+    });
   });
 
   // ────────────────────────────────────────────────────────────
