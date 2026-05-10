@@ -62,6 +62,45 @@ def _run_solana_cli(cmd: list[str]) -> str:
     return proc.stdout.strip()
 
 
+def _ensure_ata_exists(
+    deployer_path: Path, mint: Pubkey, owner_str: str
+) -> Pubkey:
+    """Idempotent SPL ATA creation. `owner_str` may be either a base58
+    pubkey (for funding an external wallet) or a path to a keypair (for
+    the deployer's own ATA).
+
+    `spl-token create-account` errors with exit-1 + "Account already
+    exists: <ATA>" on a second invocation. We parse that out and treat
+    it as success — the address comes from either the success message
+    ("Creating account <ATA>") or the error message itself.
+    """
+    cmd = [
+        "spl-token", "create-account", str(mint),
+        "--fee-payer", str(deployer_path),
+        "--owner", owner_str,
+        "--url", "devnet",
+    ]
+    try:
+        out = _run_solana_cli(cmd)
+        text = out
+    except subprocess.CalledProcessError as exc:
+        text = (exc.stdout or "") + "\n" + (exc.stderr or "")
+        if "already exists" not in text:
+            raise
+
+    # Pull the first base58 token-like substring out of the combined
+    # text — works for both "Creating account <ATA>" and
+    # "Error: Account already exists: <ATA>".
+    for line in text.splitlines():
+        for w in line.replace('"', " ").split():
+            if 32 <= len(w) <= 44 and w[0].isalnum():
+                try:
+                    return Pubkey.from_string(w.strip(":,"))
+                except ValueError:
+                    continue
+    raise RuntimeError(f"Couldn't parse ATA address from output:\n{text}")
+
+
 def _create_test_mint(deployer_path: Path) -> Pubkey:
     """Create a new SPL mint via spl-token CLI; return its address."""
     print("Creating test SPL mint (decimals=6, fee-payer=deployer)…")
@@ -84,47 +123,7 @@ def _ensure_buyer_ata_funded(deployer_path: Path, mint: Pubkey, amount_tokens: i
     """Create the deployer's ATA for the mint (if needed) + mint tokens to it.
     Returns the ATA address."""
     print(f"Creating + funding deployer's ATA for {mint}…")
-    # spl-token create-account is idempotent (-i flag = idempotent)
-    out = _run_solana_cli([
-        "spl-token", "create-account",
-        str(mint),
-        "--fee-payer", str(deployer_path),
-        "--owner", str(deployer_path),
-        "--url", "devnet",
-    ])
-    # Output: "Creating account <ata>" or "<ata> already exists"
-    ata_str = None
-    for line in out.splitlines():
-        words = line.split()
-        for w in words:
-            if len(w) >= 32 and len(w) <= 44 and w[0].isalnum():
-                try:
-                    Pubkey.from_string(w)
-                    ata_str = w
-                    break
-                except ValueError:
-                    continue
-        if ata_str:
-            break
-    if not ata_str:
-        # Fallback: derive deterministically
-        from solders.system_program import ID as _SYS
-        # The ATA is deterministic; we can also compute it via spl_associated_token_account_interface
-        # but that's another dep. Just use spl-token to query.
-        addr_out = _run_solana_cli([
-            "spl-token", "address",
-            "--token", str(mint),
-            "--owner", _run_solana_cli(["solana", "address", "--keypair", str(deployer_path)]),
-            "--url", "devnet",
-            "--verbose",
-        ])
-        for line in addr_out.splitlines():
-            if "Associated" in line:
-                ata_str = line.split()[-1]
-                break
-    if not ata_str:
-        raise RuntimeError(f"Couldn't determine ATA address from:\n{out}")
-    ata = Pubkey.from_string(ata_str)
+    ata = _ensure_ata_exists(deployer_path, mint, str(deployer_path))
 
     print(f"Minting {amount_tokens} tokens (= {amount_tokens * 10**6} base units) to {ata}…")
     _run_solana_cli([
@@ -186,28 +185,7 @@ def _fund_external_wallet(
     (idempotent) then mints `amount_tokens` (in whole-token units, scaled
     by 10**6 base units) to it. Returns the ATA address."""
     print(f"Creating + funding {recipient}'s ATA for {mint}…")
-    out = _run_solana_cli([
-        "spl-token", "create-account",
-        str(mint),
-        "--owner", str(recipient),
-        "--fee-payer", str(deployer_path),
-        "--url", "devnet",
-    ])
-    ata_str: str | None = None
-    for line in out.splitlines():
-        for w in line.split():
-            if 32 <= len(w) <= 44 and w[0].isalnum():
-                try:
-                    Pubkey.from_string(w)
-                    ata_str = w
-                    break
-                except ValueError:
-                    continue
-        if ata_str:
-            break
-    if ata_str is None:
-        raise RuntimeError(f"Couldn't determine recipient ATA from:\n{out}")
-    ata = Pubkey.from_string(ata_str)
+    ata = _ensure_ata_exists(deployer_path, mint, str(recipient))
 
     print(f"Minting {amount_tokens} tokens to {ata}…")
     _run_solana_cli([
