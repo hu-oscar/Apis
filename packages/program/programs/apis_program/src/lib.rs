@@ -75,4 +75,10 @@ pub mod apis_program {
             price_lamports_usdc,
         )
     }
+
+    /// Provider claims a Funded job, transitioning it to Started.
+    /// Only the provider's authority can call. No money moves.
+    pub fn accept_job(ctx: Context<AcceptJob>) -> Result<()> {
+        accept_job_handler(ctx)
+    }
 }

@@ -39,4 +39,13 @@ pub enum ApisError {
     /// transfer-hook partial fill or similar). Defence in depth.
     #[msg("escrow vault amount does not match expected price")]
     VaultAmountMismatch,
+    /// `accept_job`: job.status was not Funded.
+    #[msg("job is not in Funded status")]
+    JobNotFunded,
+    /// `accept_job`: job.provider didn't match the provider PDA passed in.
+    #[msg("job is not assigned to this provider")]
+    WrongProvider,
+    /// `accept_job`: provider.authority didn't match the signer.
+    #[msg("signer is not the provider's authority")]
+    WrongProviderAuthority,
 }
