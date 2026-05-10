@@ -26,6 +26,7 @@ import { JOB_DISCRIMINATOR } from "@/app/lib/generated/apis-program/src/generate
 import { explorerAccountUrl } from "@/app/lib/apis";
 import { WORKER_PROVIDER_PDA } from "@/app/lib/constants";
 import { AnomalousMatterHero } from "@/app/components/ui/anomalous-matter-hero";
+import { ApisLogo } from "@/app/components/ui/apis-logo";
 import { Globe } from "@/app/components/ui/cobe-globe";
 import { MarketplaceFlow } from "@/app/components/marketplace-flow";
 
@@ -197,8 +198,8 @@ export default function Home() {
 function Nav() {
   return (
     <nav className="mx-auto flex max-w-5xl items-center justify-between px-6 pt-8">
-      <Link href="/" className="group flex items-center gap-2">
-        <Logo />
+      <Link href="/" className="group flex items-center gap-2.5">
+        <ApisLogo size={26} className="transition group-hover:scale-105" />
         <span className="font-mono text-lg font-bold tracking-tight text-[#FAFAF9] transition group-hover:text-[#14F195]">
           apis
         </span>
@@ -222,28 +223,6 @@ function Nav() {
         <NavWalletButton />
       </div>
     </nav>
-  );
-}
-
-function Logo() {
-  // Hexagonal "swarm cell" mark — matches the hex grid backgrounds
-  // and avoids a literal bee emoji in the chrome.
-  return (
-    <svg
-      width="22"
-      height="22"
-      viewBox="0 0 22 22"
-      fill="none"
-      xmlns="http://www.w3.org/2000/svg"
-      aria-hidden
-    >
-      <path
-        d="M11 1.5 L19.5 6.25 L19.5 15.75 L11 20.5 L2.5 15.75 L2.5 6.25 Z"
-        stroke="#14F195"
-        strokeWidth="1.5"
-      />
-      <circle cx="11" cy="11" r="2.5" fill="#9945FF" />
-    </svg>
   );
 }
 
