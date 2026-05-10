@@ -1,4 +1,5 @@
 pub mod accept_job;
+pub mod cancel_job;
 pub mod confirm_completion;
 pub mod create_job;
 pub mod initialize_config;
@@ -15,6 +16,7 @@ pub mod submit_completion;
 // Per-module handler functions are named `<ix_name>_handler` to avoid
 // collision when both modules glob-re-export.
 pub use accept_job::*;
+pub use cancel_job::*;
 pub use confirm_completion::*;
 pub use create_job::*;
 pub use initialize_config::*;

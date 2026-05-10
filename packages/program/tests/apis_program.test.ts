@@ -18,6 +18,8 @@
 //                        + Funded-state-rejected
 //   confirm_completion — happy (payout + fee, vault & job closed)
 //                        + Funded-state-rejected
+//   cancel_job         — happy (refund + vault & job closed)
+//                        + Started-state-rejected
 
 import { createHash, randomBytes } from "node:crypto";
 
@@ -35,6 +37,7 @@ import {
   TOKEN_PROGRAM_ID,
 } from "@solana/spl-token";
 import {
+  ComputeBudgetProgram,
   LAMPORTS_PER_SOL,
   PublicKey,
   SystemProgram,
@@ -340,16 +343,11 @@ describe("apis_program", () => {
         .signers([bob])
         .rpc();
 
-      // Advance the chain with a unique-by-recipient tx so the next
-      // call's recent_blockhash differs and Solana's replay-protection
-      // doesn't reject the dup as "already processed" before our
-      // `init` constraint fires.
-      const [throwaway] = makeKeypairs(1);
-      await fundSol(bankrunProvider, throwaway.publicKey, 0.001);
-
       // Second must fail — Anchor's `init` constraint prevents re-creating
       // an existing PDA. Surfaces from the system program as
-      // "already in use" / 0x0.
+      // "already in use" / 0x0. Add a no-op CU-limit ix so the second
+      // tx hashes differently from the first (otherwise Solana's
+      // replay-protection rejects the dup before our `init` runs).
       try {
         await program.methods
           .registerProvider([...gpuHash], [...endpointHash])
@@ -358,6 +356,9 @@ describe("apis_program", () => {
             provider: bobPda,
             systemProgram: SystemProgram.programId,
           })
+          .preInstructions([
+            ComputeBudgetProgram.setComputeUnitLimit({ units: 200_001 }),
+          ])
           .signers([bob])
           .rpc();
         assert.fail("expected re-registration to fail");
@@ -648,11 +649,8 @@ describe("apis_program", () => {
       // The previous test sent an identical tx (same signer, same
       // accounts, same args). Solana's replay protection would reject
       // a second copy as "already processed" before the program even
-      // runs. Send a SOL transfer to a fresh keypair so this test's
-      // tx is guaranteed to hash differently from the happy one.
-      const [throwaway] = makeKeypairs(1);
-      await fundSol(bankrunProvider, throwaway.publicKey, 0.001);
-
+      // runs. Add a no-op `setComputeUnitLimit` pre-instruction so the
+      // tx structure differs and the signatures don't collide.
       try {
         await program.methods
           .acceptJob()
@@ -661,6 +659,9 @@ describe("apis_program", () => {
             provider: providerPda,
             job: jobPda,
           })
+          .preInstructions([
+            ComputeBudgetProgram.setComputeUnitLimit({ units: 200_001 }),
+          ])
           .signers([providerOwner])
           .rpc();
         assert.fail("expected JobNotFunded");
@@ -1175,6 +1176,183 @@ describe("apis_program", () => {
           /JobNotCompleted/,
           `expected JobNotCompleted, got: ${m}`,
         );
+      }
+    });
+  });
+
+  // ────────────────────────────────────────────────────────────
+  // cancel_job — buyer refund pre-accept (W2-1f)
+  // ────────────────────────────────────────────────────────────
+
+  describe("cancel_job", () => {
+    let buyer: anchor.web3.Keypair;
+    let providerOwner: anchor.web3.Keypair;
+    let providerPda: PublicKey;
+    let buyerUsdcAta: PublicKey;
+    const configPda = findConfigPda();
+
+    // Two jobs: jobToCancel stays Funded; jobAccepted gets accepted
+    // (used to test the JobNotFunded malicious case).
+    let jobPdaToCancel: PublicKey;
+    let escrowVaultToCancel: PublicKey;
+    let jobPdaAccepted: PublicKey;
+    let escrowVaultAccepted: PublicKey;
+
+    const PRICE = 1_000_000n; // 1 USDC
+
+    before(async () => {
+      [buyer, providerOwner] = makeKeypairs(2);
+      await fundSol(bankrunProvider, buyer.publicKey);
+      await fundSol(bankrunProvider, providerOwner.publicKey);
+
+      providerPda = findProviderPda(providerOwner.publicKey);
+      await program.methods
+        .registerProvider(
+          [...sha256("RTX 4090 / cancel_job test")],
+          [...sha256("wss://cancel-test.example.com")],
+        )
+        .accountsPartial({
+          authority: providerOwner.publicKey,
+          provider: providerPda,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([providerOwner])
+        .rpc();
+
+      buyerUsdcAta = await fundUsdc(buyer.publicKey, 100_000_000);
+
+      // jobToCancel: Funded only (the happy test cancels it).
+      const idCancel = new BN(randomBytes(8));
+      jobPdaToCancel = findJobPda(buyer.publicKey, idCancel);
+      escrowVaultToCancel = getAssociatedTokenAddressSync(
+        paymentMint,
+        jobPdaToCancel,
+        true,
+        TOKEN_PROGRAM_ID,
+      );
+      await program.methods
+        .createJob(
+          idCancel,
+          [...sha256("job to cancel")],
+          new BN(600),
+          new BN(Number(PRICE)),
+        )
+        .accountsPartial({
+          buyer: buyer.publicKey,
+          config: configPda,
+          provider: providerPda,
+          usdcMint: paymentMint,
+          buyerUsdcAta,
+          job: jobPdaToCancel,
+          escrowVault: escrowVaultToCancel,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([buyer])
+        .rpc();
+
+      // jobAccepted: Funded → Started (the malicious test attempts
+      // cancel on it and expects JobNotFunded).
+      const idAccepted = new BN(randomBytes(8));
+      jobPdaAccepted = findJobPda(buyer.publicKey, idAccepted);
+      escrowVaultAccepted = getAssociatedTokenAddressSync(
+        paymentMint,
+        jobPdaAccepted,
+        true,
+        TOKEN_PROGRAM_ID,
+      );
+      await program.methods
+        .createJob(
+          idAccepted,
+          [...sha256("job already accepted")],
+          new BN(600),
+          new BN(Number(PRICE)),
+        )
+        .accountsPartial({
+          buyer: buyer.publicKey,
+          config: configPda,
+          provider: providerPda,
+          usdcMint: paymentMint,
+          buyerUsdcAta,
+          job: jobPdaAccepted,
+          escrowVault: escrowVaultAccepted,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([buyer])
+        .rpc();
+      await program.methods
+        .acceptJob()
+        .accountsPartial({
+          authority: providerOwner.publicKey,
+          provider: providerPda,
+          job: jobPdaAccepted,
+        })
+        .signers([providerOwner])
+        .rpc();
+    });
+
+    it("happy: full refund to buyer; vault and Job both closed", async () => {
+      const balBefore = await fetchTokenBalance(context, buyerUsdcAta);
+
+      await program.methods
+        .cancelJob()
+        .accountsPartial({
+          buyer: buyer.publicKey,
+          config: configPda,
+          job: jobPdaToCancel,
+          usdcMint: paymentMint,
+          buyerUsdcAta,
+          escrowVault: escrowVaultToCancel,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([buyer])
+        .rpc();
+
+      // Buyer's ATA went up by exactly `price`.
+      const balAfter = await fetchTokenBalance(context, buyerUsdcAta);
+      assert.equal((balAfter - balBefore).toString(), PRICE.toString());
+
+      // Vault closed.
+      const vaultInfo = await context.banksClient.getAccount(
+        escrowVaultToCancel,
+      );
+      assert.isNull(vaultInfo, "escrow vault should be closed");
+
+      // Job closed.
+      try {
+        await program.account.job.fetch(jobPdaToCancel);
+        assert.fail("expected Job account to be closed");
+      } catch {
+        // expected
+      }
+    });
+
+    it("malicious: cancelling an accepted (Started) job → JobNotFunded", async () => {
+      try {
+        await program.methods
+          .cancelJob()
+          .accountsPartial({
+            buyer: buyer.publicKey,
+            config: configPda,
+            job: jobPdaAccepted,
+            usdcMint: paymentMint,
+            buyerUsdcAta,
+            escrowVault: escrowVaultAccepted,
+            tokenProgram: TOKEN_PROGRAM_ID,
+            associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+            systemProgram: SystemProgram.programId,
+          })
+          .signers([buyer])
+          .rpc();
+        assert.fail("expected JobNotFunded");
+      } catch (err) {
+        const m = errMsg(err);
+        assert.match(m, /JobNotFunded/, `expected JobNotFunded, got: ${m}`);
       }
     });
   });
