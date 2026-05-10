@@ -1,6 +1,7 @@
 // Test suite for apis_program — W1 instructions (register_provider,
-// create_job) plus W2's initialize_config (rest of the W2 escrow
-// lifecycle lands as further describe() blocks in subsequent commits).
+// create_job) plus W2's escrow lifecycle (initialize_config, USDC-locking
+// create_job, accept_job, submit_completion, confirm_completion,
+// cancel_job).
 //
 // Uses solana-bankrun (in-process validator) — no surfpool, no
 // solana-test-validator required. Per AGENTS.md, every instruction has
@@ -9,14 +10,30 @@
 // Coverage:
 //   initialize_config — fee-bps-bound + happy + duplicate-init
 //   register_provider — happy + duplicate-PDA + zero-hash
-//   create_job        — happy + zero-spec_hash + zero-deadline
+//   create_job        — happy (locks USDC) + zero-spec_hash
+//                       + zero-deadline + zero-price
 
 import { createHash, randomBytes } from "node:crypto";
 
 import anchor from "@anchor-lang/core";
 const BN = anchor.BN;
 
-import { LAMPORTS_PER_SOL, PublicKey, SystemProgram, Transaction } from "@solana/web3.js";
+import {
+  ASSOCIATED_TOKEN_PROGRAM_ID,
+  createAssociatedTokenAccountIdempotentInstruction,
+  createInitializeMint2Instruction,
+  createMintToInstruction,
+  getAccount,
+  getAssociatedTokenAddressSync,
+  MINT_SIZE,
+  TOKEN_PROGRAM_ID,
+} from "@solana/spl-token";
+import {
+  LAMPORTS_PER_SOL,
+  PublicKey,
+  SystemProgram,
+  Transaction,
+} from "@solana/web3.js";
 import { makeKeypairs } from "@solana-developers/helpers";
 import { BankrunProvider } from "anchor-bankrun";
 import { assert, expect } from "chai";
@@ -28,6 +45,7 @@ import type { ApisProgram } from "../target/types/apis_program";
 const PROGRAM_ID = new PublicKey(IDL.address);
 
 const ZERO_HASH = new Uint8Array(32);
+const USDC_DECIMALS = 6;
 
 const sha256 = (s: string): Buffer => createHash("sha256").update(s).digest();
 
@@ -69,6 +87,11 @@ describe("apis_program", () => {
   let bankrunProvider: BankrunProvider;
   let program: anchor.Program<ApisProgram>;
 
+  // Stand-in USDC mint created in bankrun. Set in `before()`; reused by
+  // `initialize_config` (stored as `config.usdc_mint`) and `create_job`
+  // (used as the actual mint for the buyer ATA + escrow vault).
+  let paymentMint: PublicKey;
+
   before(async () => {
     context = await startAnchor(
       "",
@@ -80,7 +103,67 @@ describe("apis_program", () => {
       IDL as ApisProgram,
       bankrunProvider,
     );
+
+    // Create the test "USDC" mint. The bankrun provider's wallet is
+    // the mint authority — we use it to mint balances to test users.
+    const [mintKp] = makeKeypairs(1);
+    paymentMint = mintKp.publicKey;
+    const tx = new Transaction()
+      .add(
+        SystemProgram.createAccount({
+          fromPubkey: bankrunProvider.publicKey,
+          newAccountPubkey: paymentMint,
+          space: MINT_SIZE,
+          lamports: 1_500_000, // ~ rent for an 82-byte mint
+          programId: TOKEN_PROGRAM_ID,
+        }),
+      )
+      .add(
+        createInitializeMint2Instruction(
+          paymentMint,
+          USDC_DECIMALS,
+          bankrunProvider.publicKey, // mint authority
+          null, // no freeze authority
+          TOKEN_PROGRAM_ID,
+        ),
+      );
+    await bankrunProvider.sendAndConfirm(tx, [mintKp]);
   });
+
+  /** Create + fund a user's USDC ATA. Returns the ATA address. */
+  const fundUsdc = async (
+    owner: PublicKey,
+    amount: number | bigint,
+  ): Promise<PublicKey> => {
+    const ata = getAssociatedTokenAddressSync(
+      paymentMint,
+      owner,
+      false,
+      TOKEN_PROGRAM_ID,
+    );
+    const tx = new Transaction()
+      .add(
+        createAssociatedTokenAccountIdempotentInstruction(
+          bankrunProvider.publicKey,
+          ata,
+          owner,
+          paymentMint,
+          TOKEN_PROGRAM_ID,
+        ),
+      )
+      .add(
+        createMintToInstruction(
+          paymentMint,
+          ata,
+          bankrunProvider.publicKey,
+          amount,
+          [],
+          TOKEN_PROGRAM_ID,
+        ),
+      );
+    await bankrunProvider.sendAndConfirm(tx);
+    return ata;
+  };
 
   // ────────────────────────────────────────────────────────────
   // initialize_config — singleton GlobalConfig PDA
@@ -93,10 +176,6 @@ describe("apis_program", () => {
 
   describe("initialize_config", () => {
     const configPda = findConfigPda();
-    // Synthetic mint pubkey — only used as a stored Pubkey value, no
-    // actual mint account needs to exist for initialize_config.
-    const [fakeUsdcMintKp] = makeKeypairs(1);
-    const fakeUsdcMint = fakeUsdcMintKp.publicKey;
 
     it("malicious: fee_bps > 10_000 → ApisError::FeeBpsTooHigh (6005)", async () => {
       // Runs first (see describe-block comment). Config doesn't exist
@@ -106,7 +185,7 @@ describe("apis_program", () => {
 
       try {
         await program.methods
-          .initializeConfig(fakeUsdcMint, 10_001)
+          .initializeConfig(paymentMint, 10_001)
           .accountsPartial({
             admin: tooGreedy.publicKey,
             config: configPda,
@@ -130,7 +209,7 @@ describe("apis_program", () => {
       await fundSol(bankrunProvider, admin.publicKey);
 
       await program.methods
-        .initializeConfig(fakeUsdcMint, 50) // 0.5%
+        .initializeConfig(paymentMint, 50) // 0.5%
         .accountsPartial({
           admin: admin.publicKey,
           config: configPda,
@@ -142,7 +221,7 @@ describe("apis_program", () => {
       const cfg = await program.account.globalConfig.fetch(configPda);
       assert.isTrue(cfg.admin.equals(admin.publicKey));
       assert.isTrue(cfg.treasury.equals(admin.publicKey));
-      assert.isTrue(cfg.usdcMint.equals(fakeUsdcMint));
+      assert.isTrue(cfg.usdcMint.equals(paymentMint));
       assert.equal(cfg.feeBps, 50);
       // W3 fields default to zero in W2.
       assert.equal(cfg.minBondLamports.toNumber(), 0);
@@ -157,7 +236,7 @@ describe("apis_program", () => {
 
       try {
         await program.methods
-          .initializeConfig(fakeUsdcMint, 100)
+          .initializeConfig(paymentMint, 100)
           .accountsPartial({
             admin: imposter.publicKey,
             config: configPda,
@@ -290,13 +369,15 @@ describe("apis_program", () => {
   });
 
   // ────────────────────────────────────────────────────────────
-  // create_job
+  // create_job — locks USDC into a per-job EscrowVault (W2-1b)
   // ────────────────────────────────────────────────────────────
 
   describe("create_job", () => {
     let buyer: anchor.web3.Keypair;
     let providerOwner: anchor.web3.Keypair;
     let providerPda: PublicKey;
+    let buyerUsdcAta: PublicKey;
+    const configPda = findConfigPda();
 
     before(async () => {
       [buyer, providerOwner] = makeKeypairs(2);
@@ -316,56 +397,81 @@ describe("apis_program", () => {
         })
         .signers([providerOwner])
         .rpc();
+
+      // Mint 1000 USDC (1e9 base units at 6 decimals) to the buyer.
+      buyerUsdcAta = await fundUsdc(buyer.publicKey, 1_000_000_000);
     });
 
-    it("happy path: creates Job in Created state with W1 defaults", async () => {
+    const buildAccounts = (jobPda: PublicKey, escrowVault: PublicKey) => ({
+      buyer: buyer.publicKey,
+      config: configPda,
+      provider: providerPda,
+      usdcMint: paymentMint,
+      buyerUsdcAta,
+      job: jobPda,
+      escrowVault,
+      tokenProgram: TOKEN_PROGRAM_ID,
+      associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+      systemProgram: SystemProgram.programId,
+    });
+
+    it("happy: locks 1 USDC, status=Funded, vault.amount==price", async () => {
       const id = new BN(randomBytes(8));
       const specHash = sha256("prompt + flux-schnell + steps=4 + cfg=0 + seed=42");
-      const deadlineOffset = new BN(600); // 10 minutes
+      const deadlineOffset = new BN(600);
+      const price = new BN(1_000_000); // 1.000000 USDC
       const jobPda = findJobPda(buyer.publicKey, id);
+      const escrowVault = getAssociatedTokenAddressSync(
+        paymentMint,
+        jobPda,
+        true, // owner is a PDA → allowOwnerOffCurve
+        TOKEN_PROGRAM_ID,
+      );
 
       const beforeTs = Math.floor(Date.now() / 1000);
       await program.methods
-        .createJob(id, [...specHash], deadlineOffset)
-        .accountsPartial({
-          buyer: buyer.publicKey,
-          provider: providerPda,
-          job: jobPda,
-          systemProgram: SystemProgram.programId,
-        })
+        .createJob(id, [...specHash], deadlineOffset, price)
+        .accountsPartial(buildAccounts(jobPda, escrowVault))
         .signers([buyer])
         .rpc();
 
-      const acct = await program.account.job.fetch(jobPda);
-      assert.equal(acct.id.toString(), id.toString());
-      assert.isTrue(acct.buyer.equals(buyer.publicKey));
-      assert.isTrue(acct.provider.equals(providerPda));
-      assert.equal(acct.priceLamportsUsdc.toNumber(), 0);
-      expect([...acct.specHash]).to.deep.equal([...specHash]);
-      assert.deepEqual(acct.status, { created: {} });
-      assert.isAtLeast(acct.fundedAt.toNumber(), beforeTs);
-      assert.equal(
-        acct.deadline.toNumber(),
-        acct.fundedAt.toNumber() + 600,
-        "deadline should equal funded_at + offset",
+      // Job state.
+      const job = await program.account.job.fetch(jobPda);
+      assert.equal(job.id.toString(), id.toString());
+      assert.isTrue(job.buyer.equals(buyer.publicKey));
+      assert.isTrue(job.provider.equals(providerPda));
+      assert.equal(job.priceLamportsUsdc.toNumber(), price.toNumber());
+      expect([...job.specHash]).to.deep.equal([...specHash]);
+      assert.deepEqual(job.status, { funded: {} }); // W2: jumps straight to Funded
+      assert.isAtLeast(job.fundedAt.toNumber(), beforeTs);
+      assert.equal(job.deadline.toNumber(), job.fundedAt.toNumber() + 600);
+      assert.isNull(job.completionProofHash);
+
+      // Vault must hold exactly the locked price.
+      const vaultAcct = await getAccount(
+        bankrunProvider.connection,
+        escrowVault,
+        "processed",
+        TOKEN_PROGRAM_ID,
       );
-      // Option<[u8; 32]> serialises as null when None.
-      assert.isNull(acct.completionProofHash);
+      assert.equal(vaultAcct.amount.toString(), price.toString());
+      assert.isTrue(vaultAcct.owner.equals(jobPda)); // PDA-owned
     });
 
     it("malicious: zero spec_hash → ApisError::SpecHashZero (6002)", async () => {
       const id = new BN(randomBytes(8));
       const jobPda = findJobPda(buyer.publicKey, id);
+      const escrowVault = getAssociatedTokenAddressSync(
+        paymentMint,
+        jobPda,
+        true,
+        TOKEN_PROGRAM_ID,
+      );
 
       try {
         await program.methods
-          .createJob(id, [...ZERO_HASH], new BN(600))
-          .accountsPartial({
-            buyer: buyer.publicKey,
-            provider: providerPda,
-            job: jobPda,
-            systemProgram: SystemProgram.programId,
-          })
+          .createJob(id, [...ZERO_HASH], new BN(600), new BN(1_000_000))
+          .accountsPartial(buildAccounts(jobPda, escrowVault))
           .signers([buyer])
           .rpc();
         assert.fail("expected SpecHashZero");
@@ -382,16 +488,17 @@ describe("apis_program", () => {
     it("malicious: deadline_offset_secs = 0 → ApisError::InvalidDeadline (6004)", async () => {
       const id = new BN(randomBytes(8));
       const jobPda = findJobPda(buyer.publicKey, id);
+      const escrowVault = getAssociatedTokenAddressSync(
+        paymentMint,
+        jobPda,
+        true,
+        TOKEN_PROGRAM_ID,
+      );
 
       try {
         await program.methods
-          .createJob(id, [...sha256("spec")], new BN(0))
-          .accountsPartial({
-            buyer: buyer.publicKey,
-            provider: providerPda,
-            job: jobPda,
-            systemProgram: SystemProgram.programId,
-          })
+          .createJob(id, [...sha256("spec")], new BN(0), new BN(1_000_000))
+          .accountsPartial(buildAccounts(jobPda, escrowVault))
           .signers([buyer])
           .rpc();
         assert.fail("expected InvalidDeadline");
@@ -401,6 +508,33 @@ describe("apis_program", () => {
           m,
           /InvalidDeadline|0x1774|6004/,
           `expected InvalidDeadline, got: ${m}`,
+        );
+      }
+    });
+
+    it("malicious: zero price → ApisError::ZeroPrice (6007)", async () => {
+      const id = new BN(randomBytes(8));
+      const jobPda = findJobPda(buyer.publicKey, id);
+      const escrowVault = getAssociatedTokenAddressSync(
+        paymentMint,
+        jobPda,
+        true,
+        TOKEN_PROGRAM_ID,
+      );
+
+      try {
+        await program.methods
+          .createJob(id, [...sha256("spec")], new BN(600), new BN(0))
+          .accountsPartial(buildAccounts(jobPda, escrowVault))
+          .signers([buyer])
+          .rpc();
+        assert.fail("expected ZeroPrice");
+      } catch (err) {
+        const m = errMsg(err);
+        assert.match(
+          m,
+          /ZeroPrice|0x1777|6007/,
+          `expected ZeroPrice, got: ${m}`,
         );
       }
     });
