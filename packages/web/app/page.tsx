@@ -430,45 +430,121 @@ function renderTimeAgo(stats: StatsState): string {
 function WhyApis() {
   return (
     <section className="border-t border-white/10 py-24">
-      <div className="mb-12 max-w-2xl">
+      <div className="mb-10 max-w-3xl">
         <p className="font-mono text-xs uppercase tracking-[0.22em] text-[#9945FF]">
-          centralized cloud vs apis
+          the price gap
         </p>
-        <h2 className="mt-3 text-3xl font-bold tracking-tight md:text-5xl">
-          Why a marketplace, not a SaaS?
+        <h2 className="mt-3 text-3xl font-bold leading-[1.05] tracking-tight md:text-5xl lg:text-6xl">
+          Up to{" "}
+          <span className="bg-gradient-to-r from-[#14F195] to-[#9945FF] bg-clip-text text-transparent">
+            80% lower
+          </span>{" "}
+          than AWS.
+          <br />
+          <span className="text-white/85">0.5% fee, not 30%.</span>
         </h2>
-        <p className="mt-4 text-base leading-relaxed text-white/65">
-          Centralized AI clouds give you compute, but you trade an account,
-          a credit card, and trust in a single operator. Apis gives you the
-          same compute with none of those.
+        <p className="mt-5 text-base leading-relaxed text-white/65">
+          Hyperscaler GPU rental, plus aggregator margin (Replicate, Fal,
+          Together) — and you end up paying ~5× what the GPU actually costs
+          to run. Apis routes USDC straight from buyer to whoever owns the
+          silicon. Protocol takes <strong className="font-semibold text-white">0.5%</strong>.
+          That&apos;s the only middleman.
         </p>
       </div>
+
+      <PriceStack />
+
       <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
         <ComparisonCard
           title="Centralized AI cloud"
           dim
           rows={[
-            "Account + KYC required",
-            "Credit card billing",
-            "Single point of failure",
-            "Vendor lock-in",
-            "Opaque pricing",
-            "Trust the operator",
+            { label: "$3–4/hr per A100 on-demand", emphasis: true },
+            { label: "30–50% aggregator margin", emphasis: true },
+            { label: "Account + KYC required" },
+            { label: "Credit card billing" },
+            { label: "Single point of failure" },
+            { label: "Vendor lock-in" },
+            { label: "Trust the operator" },
           ]}
         />
         <ComparisonCard
           title="Apis"
           rows={[
-            "Just a Solana wallet",
-            "USDC, settled on-chain",
-            "Permissionless provider set",
-            "Open Anchor program (audit it)",
-            "Per-job market price",
-            "Trust the contract",
+            { label: "Buyer sets the price per job", emphasis: true },
+            { label: "0.5% protocol fee. No middleman.", emphasis: true },
+            { label: "Just a Solana wallet" },
+            { label: "USDC, settled on-chain" },
+            { label: "Permissionless provider set" },
+            { label: "Open Anchor program (audit it)" },
+            { label: "Trust the contract" },
           ]}
         />
       </div>
     </section>
+  );
+}
+
+// Stacked-margin visualization: shows how a buyer's $1.00 splits across
+// the value chain on a centralized aggregator vs. Apis. Pure CSS bars,
+// percentages annotated. Quick eyeful, lands the "0.5% vs 30%" point.
+function PriceStack() {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      whileInView={{ opacity: 1, y: 0 }}
+      viewport={{ once: true, margin: "-15%" }}
+      transition={{ duration: 0.5 }}
+      className="mb-10 grid grid-cols-1 gap-4 rounded-2xl border border-white/10 bg-white/[0.02] p-6 md:grid-cols-2"
+    >
+      <div className="space-y-3">
+        <p className="font-mono text-[10px] uppercase tracking-wider text-white/40">
+          $1 spent on a centralized AI API
+        </p>
+        <div className="flex h-7 overflow-hidden rounded-full bg-white/[0.04]">
+          <div
+            className="flex items-center justify-center text-[10px] font-semibold text-black/85"
+            style={{ width: "60%", backgroundColor: "#FF7A6E" }}
+          >
+            60% hyperscaler
+          </div>
+          <div
+            className="flex items-center justify-center text-[10px] font-semibold text-black/85"
+            style={{ width: "35%", backgroundColor: "#FFC857" }}
+          >
+            35% aggregator
+          </div>
+          <div
+            className="flex items-center justify-center text-[10px] font-semibold text-white/85"
+            style={{ width: "5%", backgroundColor: "#3a3a3a" }}
+          />
+        </div>
+        <p className="font-mono text-[10px] text-white/40">
+          5% trickles back to the actual GPU operator.
+        </p>
+      </div>
+
+      <div className="space-y-3">
+        <p className="font-mono text-[10px] uppercase tracking-wider text-[#14F195]/85">
+          $1 spent on apis
+        </p>
+        <div className="flex h-7 overflow-hidden rounded-full bg-white/[0.04]">
+          <div
+            className="flex items-center justify-center text-[10px] font-semibold text-black/90"
+            style={{ width: "99.5%", backgroundColor: "#14F195" }}
+          >
+            99.5% to GPU provider
+          </div>
+          <div
+            className="flex items-center justify-center text-[8px] font-semibold text-white/85"
+            style={{ width: "0.5%", backgroundColor: "#9945FF" }}
+          />
+        </div>
+        <p className="font-mono text-[10px] text-[#14F195]/85">
+          0.5% protocol fee → treasury. That&apos;s it.
+        </p>
+      </div>
+    </motion.div>
   );
 }
 
@@ -478,7 +554,7 @@ function ComparisonCard({
   dim,
 }: {
   title: string;
-  rows: string[];
+  rows: { label: string; emphasis?: boolean }[];
   dim?: boolean;
 }) {
   return (
@@ -502,24 +578,32 @@ function ComparisonCard({
       >
         {title}
       </h3>
-      <ul className="space-y-2">
+      <ul className="space-y-2.5">
         {rows.map((r) => (
           <li
-            key={r}
+            key={r.label}
             className={
               dim
-                ? "flex items-center gap-2 text-sm text-white/40"
-                : "flex items-center gap-2 text-sm text-white/85"
+                ? r.emphasis
+                  ? "flex items-center gap-2 text-sm font-semibold text-white/70"
+                  : "flex items-center gap-2 text-sm text-white/40"
+                : r.emphasis
+                  ? "flex items-center gap-2 text-sm font-semibold text-white"
+                  : "flex items-center gap-2 text-sm text-white/85"
             }
           >
             <span
               className={
                 dim
-                  ? "h-1 w-1 rounded-full bg-white/30"
-                  : "h-1 w-1 rounded-full bg-[#14F195]"
+                  ? r.emphasis
+                    ? "h-1.5 w-1.5 rounded-full bg-[#FF7A6E]"
+                    : "h-1 w-1 rounded-full bg-white/30"
+                  : r.emphasis
+                    ? "h-1.5 w-1.5 rounded-full bg-[#14F195]"
+                    : "h-1 w-1 rounded-full bg-[#14F195]"
               }
             />
-            {r}
+            {r.label}
           </li>
         ))}
       </ul>
