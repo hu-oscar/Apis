@@ -44,6 +44,11 @@ import {
   WORKER_PROVIDER_PDA,
   formatUsdc,
 } from "@/app/lib/constants";
+import {
+  loadHistory,
+  recordJob,
+  type JobHistoryEntry,
+} from "@/app/lib/job-history";
 
 // W2 spec passed to the worker via the file-based side-channel. Keys must
 // match what apis_worker/inference.py expects.
@@ -103,6 +108,12 @@ export default function SubmitPage() {
     forBuyer: Address;
     amount: bigint;
   } | null>(null);
+  // Same tagging trick for the localStorage-backed job history so
+  // switching wallets doesn't briefly show the previous wallet's jobs.
+  const [historyFetch, setHistoryFetch] = useState<{
+    forBuyer: Address;
+    entries: JobHistoryEntry[];
+  } | null>(null);
 
   const buyerSigner: TransactionSigner | undefined = useMemo(() => {
     if (!session) return undefined;
@@ -137,6 +148,27 @@ export default function SubmitPage() {
     balanceFetch && balanceFetch.forBuyer === buyerAddress
       ? { amount: balanceFetch.amount }
       : null;
+
+  // Load this wallet's recorded jobs. Async-wrapped so the setState
+  // happens after a microtask boundary (React 19 strict pattern bans
+  // synchronous setState in an effect body).
+  useEffect(() => {
+    if (!buyerAddress) return;
+    let cancelled = false;
+    void (async () => {
+      const entries = loadHistory(buyerAddress);
+      if (cancelled) return;
+      setHistoryFetch({ forBuyer: buyerAddress, entries });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [buyerAddress]);
+
+  const history =
+    historyFetch && historyFetch.forBuyer === buyerAddress
+      ? historyFetch.entries
+      : [];
 
   const priceLamports = useMemo<bigint | null>(() => {
     const trimmed = priceUsdc.trim();
@@ -211,7 +243,17 @@ export default function SubmitPage() {
         feePayer: buyerSigner,
       });
 
-      // 3. Off to the result page — it'll subscribe + render when the
+      // 3. Stash the job in the buyer's local history so they can find
+      // it from /submit if they navigate away from /job/[id].
+      recordJob(buyerAddress, {
+        pda: jobPda,
+        specHashHex,
+        promptPreview: spec.prompt.slice(0, 80),
+        priceLamportsUsdc: priceLamports.toString(),
+        createdAt: Date.now(),
+      });
+
+      // 4. Off to the result page — it'll subscribe + render when the
       // worker finishes.
       router.push(`/job/${jobPda}`);
     } catch (err) {
@@ -242,6 +284,10 @@ export default function SubmitPage() {
         </header>
 
         <WalletStatusBanner walletStatus={walletStatus} address={buyerAddress} />
+
+        {history.length > 0 && walletStatus === "connected" && (
+          <JobHistorySection entries={history} />
+        )}
 
         <AnimatePresence mode="wait">
           {walletStatus === "connected" && (
@@ -298,10 +344,15 @@ export default function SubmitPage() {
                   </span>
                 </div>
                 {insufficient && (
-                  <span className="font-mono text-xs text-[#FF3B5C]">
-                    Insufficient — fund this wallet via{" "}
-                    <code>scripts/bootstrap_devnet.py --fund {buyerAddress?.slice(0, 6)}…</code>
-                  </span>
+                  <FaucetRow
+                    pubkey={buyerAddress}
+                    onSuccess={(amt) =>
+                      setBalanceFetch({
+                        forBuyer: buyerAddress!,
+                        amount: (balance?.amount ?? BigInt(0)) + amt,
+                      })
+                    }
+                  />
                 )}
                 {priceLamports == null && (
                   <span className="font-mono text-xs text-[#FF3B5C]">
@@ -337,6 +388,133 @@ export default function SubmitPage() {
 }
 
 // ─── Sub-components ──────────────────────────────────────────────────────
+
+function FaucetRow({
+  pubkey,
+  onSuccess,
+}: {
+  pubkey: Address | undefined;
+  onSuccess: (amountBaseUnits: bigint) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [okMsg, setOkMsg] = useState<string | null>(null);
+
+  const handleClick = async () => {
+    if (!pubkey || busy) return;
+    setBusy(true);
+    setErr(null);
+    setOkMsg(null);
+    try {
+      const r = await fetch("/api/faucet", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ pubkey }),
+      });
+      const body = (await r.json()) as {
+        ok?: boolean;
+        amountBaseUnits?: string;
+        amountUsdc?: string;
+        signature?: string;
+        error?: string;
+        retryAfterSeconds?: number;
+      };
+      if (!r.ok || !body.ok) {
+        if (r.status === 429 && body.retryAfterSeconds != null) {
+          const hr = Math.ceil(body.retryAfterSeconds / 3600);
+          throw new Error(
+            `Already dripped — try again in ~${hr} hour${hr === 1 ? "" : "s"}`,
+          );
+        }
+        throw new Error(body.error ?? `Faucet returned ${r.status}`);
+      }
+      onSuccess(BigInt(body.amountBaseUnits ?? "0"));
+      setOkMsg(`Dripped ${body.amountUsdc} USDC ✓`);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="flex flex-wrap items-center gap-3 rounded-lg border border-[#9945FF]/30 bg-[#9945FF]/[0.05] p-3 text-xs">
+      <span className="font-mono uppercase tracking-wider text-[#9945FF]">
+        Out of test USDC?
+      </span>
+      <motion.button
+        whileHover={busy ? {} : { scale: 1.02 }}
+        whileTap={busy ? {} : { scale: 0.98 }}
+        onClick={handleClick}
+        disabled={busy || !pubkey}
+        className="rounded-md bg-[#9945FF] px-3 py-1.5 font-mono text-xs font-semibold uppercase tracking-wider text-white shadow-[0_0_24px_-6px_rgba(153,69,255,0.6)] transition disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        {busy ? "Dripping…" : "Get 10 USDC"}
+      </motion.button>
+      {okMsg && <span className="font-mono text-[#14F195]">{okMsg}</span>}
+      {err && <span className="font-mono text-[#FF3B5C]">{err}</span>}
+    </div>
+  );
+}
+
+function JobHistorySection({ entries }: { entries: JobHistoryEntry[] }) {
+  return (
+    <motion.section
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.25 }}
+      className="space-y-3 rounded-2xl border border-white/10 bg-white/[0.02] p-5"
+    >
+      <div className="flex items-baseline justify-between">
+        <h2 className="font-mono text-xs uppercase tracking-wider text-white/60">
+          Your jobs ({entries.length})
+        </h2>
+        <span className="font-mono text-[10px] uppercase tracking-wider text-white/30">
+          local cache
+        </span>
+      </div>
+      <ul className="space-y-2">
+        {entries.slice(0, 5).map((e) => (
+          <li key={e.pda}>
+            <Link
+              href={`/job/${e.pda}`}
+              className="group flex items-center justify-between gap-4 rounded-lg border border-white/5 bg-black/40 px-4 py-3 transition hover:border-[#14F195]/40 hover:bg-[#14F195]/[0.04]"
+            >
+              <div className="min-w-0 flex-1 space-y-0.5">
+                <p className="truncate text-sm text-white/85">
+                  {e.promptPreview || <span className="italic text-white/40">no preview</span>}
+                </p>
+                <p className="font-mono text-[10px] text-white/40">
+                  {e.pda.slice(0, 8)}…{e.pda.slice(-4)}
+                </p>
+              </div>
+              <div className="text-right">
+                <p className="font-mono text-xs text-[#14F195]">
+                  {(BigInt(e.priceLamportsUsdc) / BigInt(1_000_000)).toString() + "."
+                    + (BigInt(e.priceLamportsUsdc) % BigInt(1_000_000)).toString().padStart(6, "0").replace(/0+$/, "") || "0"} USDC
+                </p>
+                <p className="font-mono text-[10px] text-white/40">
+                  {timeAgo(e.createdAt)}
+                </p>
+              </div>
+            </Link>
+          </li>
+        ))}
+      </ul>
+    </motion.section>
+  );
+}
+
+function timeAgo(unixMs: number): string {
+  const sec = Math.round((Date.now() - unixMs) / 1000);
+  if (sec < 60) return `${sec}s ago`;
+  const min = Math.round(sec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.round(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const day = Math.round(hr / 24);
+  return `${day}d ago`;
+}
 
 function NumberField({
   label,
