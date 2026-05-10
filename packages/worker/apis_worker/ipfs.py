@@ -31,13 +31,23 @@ def _jwt() -> str:
 async def upload_png(
     png_bytes: bytes, name: str = "apis-result.png"
 ) -> str:
-    """Upload a PNG to Pinata; return the IPFS CID."""
+    """Upload a PNG to Pinata as a public file; return the IPFS CID.
+
+    `network=public` is critical — without it Pinata defaults to
+    private storage, and `gateway.pinata.cloud/ipfs/<cid>` returns 404
+    once the post-upload cache evicts (~hours). The buyer's
+    `/job/[id]` page renders results via the public gateway with no
+    auth, so private pins are invisible to it.
+    """
     headers = {"Authorization": f"Bearer {_jwt()}"}
     files = {"file": (name, png_bytes, "image/png")}
+    data = {"network": "public"}
     log.info("uploading %d bytes to Pinata as %s", len(png_bytes), name)
 
     async with httpx.AsyncClient(timeout=60.0) as client:
-        resp = await client.post(PINATA_UPLOAD_URL, headers=headers, files=files)
+        resp = await client.post(
+            PINATA_UPLOAD_URL, headers=headers, files=files, data=data
+        )
     resp.raise_for_status()
 
     body = resp.json()
