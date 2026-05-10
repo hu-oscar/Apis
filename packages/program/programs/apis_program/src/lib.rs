@@ -81,4 +81,15 @@ pub mod apis_program {
     pub fn accept_job(ctx: Context<AcceptJob>) -> Result<()> {
         accept_job_handler(ctx)
     }
+
+    /// Provider records the inference result hash and transitions the
+    /// job from Started → Completed. The buyer (or anyone after the
+    /// dispute window) can then call `confirm_completion` to release
+    /// the escrowed USDC. No money moves here.
+    pub fn submit_completion(
+        ctx: Context<SubmitCompletion>,
+        proof_hash: [u8; 32],
+    ) -> Result<()> {
+        submit_completion_handler(ctx, proof_hash)
+    }
 }
