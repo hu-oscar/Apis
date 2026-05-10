@@ -98,4 +98,10 @@ pub mod apis_program {
     pub fn confirm_completion(ctx: Context<ConfirmCompletion>) -> Result<()> {
         confirm_completion_handler(ctx)
     }
+
+    /// Buyer cancels a Funded job (before any provider accepts it).
+    /// Full vault refund to the buyer; vault + Job both closed.
+    pub fn cancel_job(ctx: Context<CancelJob>) -> Result<()> {
+        cancel_job_handler(ctx)
+    }
 }
