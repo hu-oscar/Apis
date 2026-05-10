@@ -125,22 +125,22 @@ sequenceDiagram
   participant W as Worker (MLX)
 
   B->>V: POST /api/spec (prompt, model, steps, dimensions)
-  V->>P: pin spec JSON (name = "spec:&lt;hash&gt;")
+  V->>P: pin spec JSON (name = "spec:[hash]")
   B->>A: create_job(price, spec_hash, deadline)
   Note over A: USDC moved buyer ATA → escrow vault<br/>Job PDA created
   A-->>W: JobCreated event (WebSocket logs)
-  W->>V: GET /api/spec/&lt;hash&gt;
+  W->>V: GET /api/spec/[hash]
   V->>P: list by name → fetch via gateway
   V-->>W: spec JSON
   W->>A: accept_job
   Note over A: Funded → Started
   W->>W: mflux-generate (~50s warm, ~3-4 min first run)
   W->>P: pin result PNG
-  W->>V: POST /api/results/&lt;pda&gt; (cid, proof_hash)
-  V->>P: pin result record (name = "result:&lt;pda&gt;")
+  W->>V: POST /api/results/[pda] (cid, proof_hash)
+  V->>P: pin result record (name = "result:[pda]")
   W->>A: submit_completion(proof_hash)
   Note over A: Started → Completed
-  B->>V: GET /api/jobs/&lt;pda&gt;
+  B->>V: GET /api/jobs/[pda]
   V-->>B: on-chain Job + IPFS CID merged
   B->>A: confirm_completion
   Note over A: vault → provider + treasury<br/>Job + vault closed, rent → buyer
