@@ -92,4 +92,10 @@ pub mod apis_program {
     ) -> Result<()> {
         submit_completion_handler(ctx, proof_hash)
     }
+
+    /// Buyer releases escrow: payout to provider, fee to treasury,
+    /// vault + Job accounts closed (rent returned to buyer).
+    pub fn confirm_completion(ctx: Context<ConfirmCompletion>) -> Result<()> {
+        confirm_completion_handler(ctx)
+    }
 }

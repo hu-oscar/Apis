@@ -54,4 +54,20 @@ pub enum ApisError {
     /// `submit_completion`: proof_hash was the zero hash; reject.
     #[msg("proof_hash must not be zero")]
     ProofHashZero,
+    /// `confirm_completion`: signer wasn't the job's buyer (defensive;
+    /// the seeds constraint catches this case first in practice).
+    #[msg("signer is not the job's buyer")]
+    WrongBuyer,
+    /// `confirm_completion`: job.status was not Completed.
+    #[msg("job is not in Completed status")]
+    JobNotCompleted,
+    /// `confirm_completion`: passed treasury account didn't match
+    /// config.treasury.
+    #[msg("treasury account does not match config.treasury")]
+    WrongTreasury,
+    /// `confirm_completion`: fee math overflowed (price * fee_bps).
+    /// Should never trigger under realistic prices + bps caps but is
+    /// caught by `checked_*` for defence in depth.
+    #[msg("arithmetic overflow in fee calculation")]
+    ArithmeticOverflow,
 }
