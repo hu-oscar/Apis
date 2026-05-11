@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.95.1",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@solana/kit": "^6.9.0",
     "@solana/program-client-core": "^6.9.0",
     "@solana-program/token": "^0.13.0",

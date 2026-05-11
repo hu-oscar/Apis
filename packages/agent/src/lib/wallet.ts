@@ -15,10 +15,16 @@ import {
   type KeyPairSigner,
   type Address,
 } from "@solana/kit";
-import { existsSync, readFileSync, writeFileSync, chmodSync, mkdirSync } from "node:fs";
+import {
+  existsSync,
+  readFileSync,
+  writeFileSync,
+  chmodSync,
+  mkdirSync,
+} from "node:fs";
+import { generateKeyPairSync } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
-import { generateKeyPairSigner } from "@solana/kit";
 
 const DEFAULT_PATH = resolve(homedir(), ".config", "apis", "agent.json");
 
@@ -62,7 +68,12 @@ export async function loadAgentWallet(path?: string): Promise<AgentWallet> {
 
 /** Generate + persist a fresh agent keypair at the default path
  *  (mode 0600). Returns the pubkey so the caller can prompt the user
- *  to fund it before retrying. */
+ *  to fund it before retrying.
+ *
+ *  We use Node's native ed25519 keygen (extractable keys by default)
+ *  rather than @solana/kit's `generateKeyPairSigner` — the latter
+ *  produces SubtleCrypto keys with `extractable: false`, which means
+ *  we can't write them back to disk in Solana's CLI format. */
 export async function bootstrapAgentWallet(
   path?: string,
 ): Promise<{ address: Address; path: string }> {
@@ -74,30 +85,25 @@ export async function bootstrapAgentWallet(
     );
   }
   mkdirSync(dirname(p), { recursive: true });
-  const signer = await generateKeyPairSigner();
-  // Re-extract the secret bytes via the SubtleCrypto export path used
-  // internally by @solana/kit. As of v6 the cleanest way is to use the
-  // signer's `keyPair.privateKey` and export both halves.
-  // Simpler: use Web Crypto directly to round-trip the secret material.
-  const exported = await exportSignerBytes(signer);
-  writeFileSync(p, JSON.stringify(Array.from(exported)));
-  chmodSync(p, 0o600);
-  return { address: signer.address, path: p };
-}
 
-/** Export a KeyPairSigner's 64-byte secret-key form (32 bytes
- *  private + 32 bytes public) — matches the Solana CLI's id.json
- *  layout. We round-trip through SubtleCrypto since `@solana/kit`
- *  doesn't expose the bytes directly on the signer interface. */
-async function exportSignerBytes(signer: KeyPairSigner): Promise<Uint8Array> {
-  const priv = await crypto.subtle.exportKey("pkcs8", signer.keyPair.privateKey);
-  const pub = await crypto.subtle.exportKey("raw", signer.keyPair.publicKey);
-  // PKCS8 wraps the 32-byte Ed25519 seed inside an ASN.1 envelope; the
-  // raw seed is the last 32 bytes.
-  const privBytes = new Uint8Array(priv).slice(-32);
-  const pubBytes = new Uint8Array(pub);
-  const out = new Uint8Array(64);
-  out.set(privBytes, 0);
-  out.set(pubBytes, 32);
-  return out;
+  // Node 22+ supports synchronous ed25519 keygen. Export as DER and
+  // pull out the raw 32-byte seed + 32-byte pubkey.
+  const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+  const privDer = privateKey.export({ format: "der", type: "pkcs8" });
+  const pubDer = publicKey.export({ format: "der", type: "spki" });
+  // PKCS8 wraps the seed in an ASN.1 envelope; the seed is the last
+  // 32 bytes. Same for SPKI (raw pubkey is the trailing 32 bytes).
+  const privBytes = new Uint8Array(privDer).slice(-32);
+  const pubBytes = new Uint8Array(pubDer).slice(-32);
+  const full = new Uint8Array(64);
+  full.set(privBytes, 0);
+  full.set(pubBytes, 32);
+
+  writeFileSync(p, JSON.stringify(Array.from(full)));
+  chmodSync(p, 0o600);
+
+  // Round-trip through createKeyPairSignerFromBytes to validate the
+  // file we just wrote is loadable. Throws if the export was malformed.
+  const signer = await createKeyPairSignerFromBytes(full);
+  return { address: signer.address, path: p };
 }
