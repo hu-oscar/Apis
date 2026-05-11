@@ -6,7 +6,17 @@ Pay USDC, get IPFS results, settled on-chain via an open Anchor program.
 No accounts, no middleman, no vendor lock-in. Buyers post jobs, registered
 workers pick them up, escrow releases on proof of completion.
 
-> Submitted to **Dev3pack hackathon — Solana track ($10k pool)**.
+Two surfaces, one program:
+
+- **Buyer web app** at `apis-web-five.vercel.app` — browse providers
+  with live hardware specs, submit jobs, watch them run, settle on-chain.
+- **Provider desktop app** (Tauri / macOS) — onboard, run benchmarks,
+  publish signed liveness heartbeats with chip / RAM / speed / price,
+  monitor earnings + GPU utilization, auto-pause when other apps need
+  the GPU.
+
+> Submitted to **Dev3pack hackathon — Solana track ($10k pool)** ·
+> tagged **v0.3.0** (Phase 1.5 — complete + beautiful + provider-aware web).
 
 ---
 
@@ -41,6 +51,53 @@ Solana Explorer shows all four lifecycle transactions —
 > · settled on Solana devnet — provider got paid 0.995 USDC,
 >   treasury 0.005 USDC, vault closed, rent refunded to the buyer.
 > End-to-end pipeline: **~56 seconds**.
+
+---
+
+## Try it in 2 minutes (for judges)
+
+No setup, no install, just a wallet.
+
+1. Switch **Phantom** to devnet (Settings → Developer Settings → Testnet Mode
+   ON → network: Devnet). Or any Solana wallet that supports devnet.
+2. Open <https://apis-web-five.vercel.app>. Click **Connect wallet** top-right.
+3. Navigate to **submit**. If your wallet shows `0 USDC`, click **Get 10
+   USDC** — Apis faucets test-mint USDC to your ATA in ~3s. (Falls back
+   to `/network` if the form prompts you for a provider — click "Use
+   this provider" on the live row.)
+4. Type a prompt, leave the rest at defaults, click **Submit job**. Phantom
+   prompts → approve. Page redirects to `/job/[id]`.
+5. Watch the pipeline: Funded → Started → Completed (~60s on the reference
+   M3 Pro worker). Click **Confirm & release USDC**. Phantom approves the
+   settlement tx, the result image displays, your wallet's USDC drops
+   by the job price.
+
+While you're there: peek at **/stats** for live network telemetry,
+**/network** for a list of providers with their published hardware,
+**/history** for the jobs your wallet has submitted (works across
+sessions via per-wallet localStorage), and **/provider/[pda]** for a
+provider's profile with chip / RAM / Flux speed / suggested price.
+
+---
+
+## What ships in this submission
+
+| Feature (PRD ref) | Status | Notes |
+|---|---|---|
+| **F1** — Provider desktop app (Tauri) | ✅ | macOS-only. System tray, signed heartbeats, real earnings dashboard, GPU contention auto-pause, hardware detection + Flux benchmark, suggested $/job price. |
+| **F2** — Buyer web app (Next.js) | ✅ | 7 routes (landing, /network, /provider/[pda], /submit, /job/[id], /stats, /history), live on-chain reads, Phantom-signed buyer flow, cancel & refund, branded 404/error/loading chrome, mobile-responsive. |
+| **F3** — On-chain escrow program (Anchor) | ✅ | 7 instructions, full lifecycle, 20 bankrun tests (≥1 happy + ≥1 malicious-input per instruction). Deployed to devnet at `2qe8YXc…SiH868mhf`. |
+| **F4** — MCP + x402 agent rails | ❌ | **Permanently dropped** — scope cut to focus on a complete buyer + provider experience. |
+| **F5** — Multi-GPU pooling | ❌ | **Permanently dropped** — single-GPU per provider, with `capacity` in heartbeat reserved for future bumping. |
+
+**Signed liveness wire** ties the two surfaces together: the worker
+Ed25519-signs every heartbeat with its on-chain `Provider.authority`
+key, Vercel verifies the signature + matches it to chain, then writes
+the enriched payload to KV. Buyer pages read it back — so the chip
+and benchmark you see on `/network` are cryptographically attested by
+the provider's actual keypair, not a self-reported label. (See
+`packages/worker/apis_worker/heartbeat.py` and
+`packages/web/app/api/heartbeat/[pda]/route.ts`.)
 
 ---
 
@@ -112,6 +169,40 @@ Anchor `emit!` event the worker subscribes to via `logsSubscribe`.
   pinning for the result PNG, plus a `name`-indexed key-value store for
   the buyer↔worker side-channel JSON. One vendor, two uses, free tier.
 
+### Signed heartbeats
+
+Every 30s the worker posts a heartbeat to Vercel:
+
+```jsonc
+{
+  "payload": {
+    "at": 1778537716009,
+    "version": "0.3.0",
+    "capacity": 1,
+    "chip": "Apple M3 Pro",
+    "ramGb": 18,
+    "cpuCores": 11,
+    "secondsPerImage": "271.040",
+    "suggestedPriceUsdcBase": "75289"
+  },
+  "signature": "<base58, 64 bytes>",   // Ed25519(canonical_json(payload))
+  "publicKey": "<base58, 32 bytes>"
+}
+```
+
+The Vercel route does four checks before persisting (replay window ±5min,
+ed25519 signature verify via `tweetnacl`, on-chain `Provider.authority`
+lookup, publicKey == authority match). The buyer pages then surface the
+chip / speed / suggested price on `/network`, `/provider/[pda]`, and
+`/stats` — knowing they were attested by the keypair that registered
+the provider on-chain.
+
+The canonical JSON encoder is byte-identical across Python and JS
+(strings only — `secondsPerImage` is a decimal string, not a float,
+to avoid `json.dumps(12.0)` → `"12.0"` vs `JSON.stringify(12.0)` →
+`"12"` disagreement). End-to-end interop verified with a deterministic-
+keypair smoke test.
+
 ---
 
 ## Job lifecycle
@@ -151,9 +242,11 @@ sequenceDiagram
 ```
 
 If a worker doesn't accept within the deadline, the buyer can call
-`cancel_job` for a full refund. The program also has `submit_completion`
-gating: only the registered provider's `authority` can post a proof for
-a job that targets it.
+`cancel_job` for a full refund — wired to the **Cancel & refund** button
+on `/job/[id]`'s Funded-state card, with a live deadline countdown
+("expires in 4m 32s") that turns amber under one minute. The program
+also has `submit_completion` gating: only the registered provider's
+`authority` can post a proof for a job that targets it.
 
 ---
 
@@ -230,6 +323,7 @@ etc.).
 | `@solana/react-hooks` | `useWalletConnection`, `useSolanaClient`, `useSendTransaction`, `useWalletSession` |
 | `@solana-program/token` | `getMintToInstruction`, `getCreateAssociatedTokenIdempotentInstructionAsync` (faucet) |
 | `codama` + `@codama/nodes-from-anchor` + `@codama/renderers-js` | IDL → typed TS client (instruction builders, account fetchers, PDA helpers, error parsers) |
+| `tweetnacl` + `bs58` | Ed25519 signature verification on incoming worker heartbeats (`/api/heartbeat/[pda]` POST) |
 
 The TS client is regenerated on every program rebuild via `pnpm
 codama:generate` — typed `getCreateJobInstructionAsync`,
@@ -241,11 +335,11 @@ IDL. No hand-rolled discriminators on the web side.
 
 | Library | Use |
 |---|---|
-| `solders` 0.26+ | Keypair, Pubkey, Instruction, MessageV0, VersionedTransaction |
+| `solders` 0.26+ | Keypair, Pubkey, Instruction, MessageV0, VersionedTransaction. Also signs every heartbeat with the worker authority key. |
 | `solana` 0.36+ | `AsyncClient`, `connect()` for WebSocket logs subscription, `TxOpts` |
 | `borsh-construct` | Anchor event decoders (mirrors `programs/apis_program/src/events.rs`) |
 | `websockets` | Auto-reconnecting `logsSubscribe` loop with exponential backoff |
-| `httpx` | Pinata uploads + Vercel API calls |
+| `httpx` | Pinata uploads + Vercel API calls (specs, results, signed heartbeats) |
 | `mflux` 0.17 + `mlx` | Flux Schnell inference on Apple Silicon (Metal-backed) |
 | `python-dotenv` | Load `packages/worker/.env` |
 | `Pillow`, `imagehash` | Result post-processing |
@@ -253,6 +347,27 @@ IDL. No hand-rolled discriminators on the web side.
 Anchor 1.0's IDL format isn't supported by `anchorpy` 0.21 yet, so the
 worker uses static borsh layouts + IDL-derived discriminators directly.
 Documented in `MEMORY.md`.
+
+### Desktop provider app (Rust + React, Tauri 2)
+
+| Library | Use |
+|---|---|
+| `tauri` 2 (with `tray-icon` + `image-png` features) | macOS-native window + menu-bar tray icon, four-state hex glyph (active green / paused amber / error red / inactive gray) |
+| `tauri-plugin-store` | Persistent KV for settings (HF token, Pinata JWT, API base, keypair path) + the local 100-job earnings ledger |
+| `tauri-plugin-opener` | Surfacing tx links on Solana Explorer |
+| `tokio` (process, io-util, sync, macros) | Worker subprocess lifecycle, line-by-line log streaming |
+| React 19 + `framer-motion` | The dashboard UI (provider PDA card, earnings, benchmark, GPU monitor, recent jobs) |
+
+The desktop app spawns the Python worker as a child process, forwards
+HuggingFace + Pinata + API-base credentials via env, and additionally
+publishes the detected hardware + most-recent Flux benchmark + the
+fair-tier suggested price (`APIS_PROVIDER_CHIP`,
+`APIS_PROVIDER_RAM_GB`, `APIS_PROVIDER_CPU_CORES`,
+`APIS_BENCHMARK_SECONDS_PER_IMAGE`, `APIS_SUGGESTED_PRICE_USDC_BASE`).
+The worker bakes those into every signed heartbeat. macOS-only at v0.3.
+Cross-platform support is queued for Phase 2 (Tauri builds Win/Linux
+natively; the bottleneck is Flux Schnell's CUDA path for non-Mac
+providers).
 
 ### Solana CLI tooling
 
@@ -296,23 +411,42 @@ Apis/
 │   │   │       └── kv.ts                    # KV abstraction
 │   │   └── DEPLOY.md                        # Vercel runbook
 │   │
-│   └── worker/              # Python provider runtime
-│       ├── apis_worker/
-│       │   ├── listener.py                  # logsSubscribe + dispatch
-│       │   ├── inference.py                 # mflux subprocess wrapper
-│       │   ├── ipfs.py                      # Pinata v3 upload
-│       │   ├── submit.py                    # accept_job + submit_completion
-│       │   ├── heartbeat.py                 # signed liveness + hardware
-│       │   ├── benchmark.py                 # one-shot mflux timer (CLI)
-│       │   ├── spec_channel.py              # dual-mode (HTTP / FS)
-│       │   ├── result_channel.py            # dual-mode (HTTP / FS)
-│       │   └── decoder.py                   # event borsh layouts
-│       └── scripts/
-│           ├── bootstrap_devnet.py          # idempotent mint + config init
-│           ├── bootstrap_keypair.py         # worker keypair creation
-│           ├── register_provider.py         # one-shot Provider PDA reg
-│           ├── test_create_job.py           # buyer-side e2e
-│           └── test_confirm_job.py          # buyer-side settlement
+│   ├── worker/              # Python provider runtime
+│   │   ├── apis_worker/
+│   │   │   ├── listener.py                  # logsSubscribe + dispatch
+│   │   │   ├── inference.py                 # mflux subprocess wrapper
+│   │   │   ├── ipfs.py                      # Pinata v3 upload
+│   │   │   ├── submit.py                    # accept_job + submit_completion
+│   │   │   ├── heartbeat.py                 # signed liveness + hardware
+│   │   │   ├── benchmark.py                 # one-shot mflux timer (CLI)
+│   │   │   ├── spec_channel.py              # dual-mode (HTTP / FS)
+│   │   │   ├── result_channel.py            # dual-mode (HTTP / FS)
+│   │   │   └── decoder.py                   # event borsh layouts
+│   │   └── scripts/
+│   │       ├── bootstrap_devnet.py          # idempotent mint + config init
+│   │       ├── bootstrap_keypair.py         # worker keypair creation
+│   │       ├── register_provider.py         # one-shot Provider PDA reg
+│   │       ├── test_create_job.py           # buyer-side e2e
+│   │       └── test_confirm_job.py          # buyer-side settlement
+│   │
+│   └── apis-provider/       # Tauri 2 desktop app (macOS, F1)
+│       ├── src-tauri/
+│       │   ├── src/
+│       │   │   ├── lib.rs                   # Builder, setup, command registry
+│       │   │   ├── worker.rs                # subprocess lifecycle + log stream
+│       │   │   ├── tray.rs                  # menu-bar tray + 4 state icons
+│       │   │   ├── gpu_monitor.rs           # ioreg-based GPU % sampler
+│       │   │   ├── hw_detect.rs             # sysctl chip / RAM / cores
+│       │   │   └── benchmark.rs             # spawns apis_worker.benchmark
+│       │   ├── icons/tray/                  # active/paused/error/inactive PNGs
+│       │   └── Cargo.toml                   # tauri features: tray-icon, image-png
+│       └── src/                              # React dashboard
+│           ├── App.tsx                       # main shell
+│           ├── lib/settings.ts               # Tauri Store settings + autoPause
+│           ├── lib/job-history.ts            # persistent earnings ledger
+│           ├── lib/gpu-monitor.ts            # rolling-avg hook
+│           ├── lib/benchmark.ts              # detectHardware + runBenchmark
+│           └── components/Onboarding.tsx     # first-launch 3-step wizard
 │
 ├── docs/                    # research, PRD, tech design (v1)
 ├── AGENTS.md                # engineering rules + agent posture
@@ -329,10 +463,14 @@ Apis/
 - **Rust** + **Solana CLI** (3.1.8+) + **Anchor** 1.0.2 (`avm install 1.0.2`)
 - **Node.js** 20+ + **pnpm** 10
 - **Python** 3.12 + venv
-- **Mac with Apple Silicon** for the worker (the reference inference
-  backend uses MLX). The program + web app run anywhere.
+- **Mac with Apple Silicon** for the worker + desktop app (the reference
+  inference backend uses MLX; the desktop app's hardware-detection +
+  GPU-monitor paths shell out to `sysctl` and `ioreg`). The program + web
+  app run anywhere.
 - **Phantom wallet** browser extension on devnet
 - A **Pinata** account with a JWT (Files: Write scope) — free tier is fine
+- A **HuggingFace** account + token, with the FLUX.1-schnell repo terms
+  accepted (gated repo)
 
 ### 1. Clone + install
 
@@ -402,6 +540,103 @@ pnpm --filter web dev
 Connect Phantom (devnet), submit a job, watch it land. The web's API
 routes fall back to `/tmp/apis_kv/` when `PINATA_JWT` is unset, so
 local-only dev needs no Pinata.
+
+### 6. Run the desktop provider app (optional — replaces step 4 for a richer experience)
+
+The Tauri desktop app spawns the same `apis_worker` Python process you
+run in step 4, but adds: a system-tray indicator, the signed-heartbeat
+hardware metadata (chip / RAM / Flux speed / suggested price), an
+earnings ledger persisted across restarts, GPU-contention auto-pause,
+and a one-click in-app Flux Schnell benchmark.
+
+```bash
+pnpm --filter apis-provider tauri dev   # opens a macOS window
+```
+
+First boot is ~30s (Rust shell compile). Once the window opens:
+
+1. Click ⚙ top-right → fill in HF token, Pinata JWT, API base
+   (`http://localhost:3000` for local or `https://apis-web-five.vercel.app`
+   for prod). Set Python interpreter to the absolute path of your
+   `packages/worker/.venv/bin/python`, and Working dir to your
+   `packages/worker`.
+2. Save → close the drawer.
+3. (Optional) Click **Run benchmark** to measure your Flux speed.
+4. Toggle **OFFLINE → ONLINE** top-right. Worker subprocess spawns,
+   signed heartbeats start flowing.
+
+The tray icon turns green; left-click brings the window forward,
+right-click for Pause/Resume/Quit. Closing the window hides it instead
+of killing the worker — quit via the tray menu when you're done.
+
+To build a distributable `.app` + `.dmg` (unsigned, devnet only):
+
+```bash
+pnpm --filter apis-provider tauri build
+# bundle output: packages/apis-provider/src-tauri/target/release/bundle/
+```
+
+See `packages/apis-provider/BUILD.md` for Gatekeeper workarounds when
+distributing the unsigned bundle.
+
+---
+
+## Scope: what's in, what's out
+
+Honest accounting for the hackathon submission.
+
+**In.**
+
+- Permissionless provider registration (no whitelist, no KYC, anyone with
+  a Solana wallet + ~0.05 SOL devnet can register).
+- Real escrow lifecycle on devnet — `create_job` locks USDC, `accept_job`
+  / `submit_completion` move state, `confirm_completion` pays out
+  provider + treasury and closes accounts (rent refunded).
+- Real inference workload — Flux Schnell on Apple Silicon via MLX, with
+  cryptographic spec/result hashing so the on-chain `proof_hash` actually
+  binds to the buyer's prompt + the worker's output bytes.
+- IPFS pinning for results (Pinata v3 API).
+- Buyer cancel path with deadline countdown UI.
+- Signed liveness heartbeats end-to-end (worker Ed25519-signs, web
+  verifies + matches on-chain `Provider.authority`).
+- 20/20 bankrun tests on the program (≥1 happy + ≥1 malicious-input
+  per instruction).
+- 7-route web app with Phantom integration + test USDC faucet.
+- Tauri desktop app (macOS) for providers.
+
+**Out (and why).**
+
+- **MCP server + x402 paywall (F4)** — dropped. The original plan was an
+  agent-facing API surface so Claude / ElizaOS could autonomously buy
+  inferences. Re-scoped to "complete the buyer + provider experience"
+  during Sprint 3; the agent layer is a Phase 2 feature that doesn't
+  block the core marketplace narrative.
+- **Multi-GPU pooling (F5)** — dropped permanently. One worker process
+  per Mac, with `capacity` reserved in the signed heartbeat for future
+  multi-GPU bumping.
+- **TEE / zkML verification** — out of scope per Research §4 (infeasible
+  on consumer GPUs in 2026). The MVP relies on layer-1 verification
+  (signatures + on-chain proof hash); spot-check + slashing logic is
+  the Sprint 4 deliverable, not in this submission.
+- **Mainnet** — devnet only. Test mint, no real-money exposure. Mainnet
+  is gated on a security audit (Phase 2).
+- **Auto-update / Stronghold-encrypted keypair / native notifications**
+  — desktop app polish queued for after Sprint 4 escrow polish.
+- **Code signing on the desktop bundle** — unsigned `.dmg` requires
+  Gatekeeper workaround (`xattr -d com.apple.quarantine …`). Real
+  signing needs an Apple Developer Program account, Phase 2.
+
+**Known cosmetic bugs.**
+
+- Active/Total job counters on the desktop app's Provider PDA card
+  show u64 noise — off-by-N byte offset in the W2 Provider account
+  decoder, doesn't affect the on-chain flow. Fix queued for Sprint 4.
+- Heartbeat lookup latency is ~700ms–1s per PDA (Pinata roundtrip),
+  so `/network` and `/stats` initial load takes ~5s. Mitigated with
+  HexSwarm loading states. Real fix is a batched
+  `/api/heartbeats?pdas=…` endpoint — Sprint 4 polish.
+
+---
 
 ## License
 
