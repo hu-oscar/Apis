@@ -241,6 +241,18 @@ function Nav() {
           network
         </Link>
         <Link
+          href="/stats"
+          className="hidden font-mono text-xs uppercase tracking-wider text-white/65 transition hover:text-[#14F195] sm:inline-block"
+        >
+          stats
+        </Link>
+        <Link
+          href="/history"
+          className="hidden font-mono text-xs uppercase tracking-wider text-white/65 transition hover:text-[#14F195] sm:inline-block"
+        >
+          history
+        </Link>
+        <Link
           href="/submit"
           className="hidden font-mono text-xs uppercase tracking-wider text-white/65 transition hover:text-[#14F195] sm:inline-block"
         >

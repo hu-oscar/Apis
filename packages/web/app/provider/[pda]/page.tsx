@@ -663,6 +663,18 @@ function Nav() {
           network
         </Link>
         <Link
+          href="/stats"
+          className="font-mono text-xs uppercase tracking-wider text-white/60 transition hover:text-[#14F195]"
+        >
+          stats
+        </Link>
+        <Link
+          href="/history"
+          className="font-mono text-xs uppercase tracking-wider text-white/60 transition hover:text-[#14F195]"
+        >
+          history
+        </Link>
+        <Link
           href="/submit"
           className="font-mono text-xs uppercase tracking-wider text-white/60 transition hover:text-[#14F195]"
         >
