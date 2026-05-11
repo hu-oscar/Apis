@@ -1,8 +1,8 @@
 [package]
 name = "apis-provider"
 version = "0.1.0"
-description = "A Tauri App"
-authors = ["you"]
+description = "Apis Provider — desktop runtime that manages the apis_worker child process and exposes status to the dashboard UI."
+authors = ["Apis"]
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -22,4 +22,8 @@ tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Tokio is already a transitive dep of tauri; we depend on it directly
+# so we can pull in the `process` + `io-util` features for the worker
+# subprocess wiring.
+tokio = { version = "1", features = ["process", "io-util", "rt-multi-thread", "sync", "macros"] }
 
