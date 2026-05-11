@@ -18,7 +18,12 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+# `tray-icon` lights up the macOS / Windows / Linux status-bar icon
+# APIs (Sprint 2.7). Without it, `tauri::tray::*` is gated behind a
+# cfg flag and won't compile.
+# `image-png` pulls in the PNG decoder used by `Image::from_bytes`,
+# which the tray module relies on to load its embedded state icons.
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-opener = "2"
 # Persistent key/value store for settings (HF_TOKEN, PINATA_JWT,
 # APIS_API_BASE, python_path, …). Writes JSON to the app's local
