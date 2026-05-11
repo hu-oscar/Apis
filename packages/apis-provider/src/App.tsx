@@ -361,6 +361,37 @@ function App() {
     [history, inFlightPrices, nowMs],
   );
 
+  // Build the env tuple list start_worker forwards to the spawned
+  // Python process. Beyond the auth fields from Settings we also
+  // pass the desktop-detected hardware + most-recent benchmark so the
+  // worker's signed heartbeat carries a fully-populated payload —
+  // without these, buyer-facing provider cards on the web show no
+  // chip / RAM / speed and fall back to "unknown". Memoized on the
+  // inputs so both call sites (manual toggle + GPU auto-resume)
+  // get the latest values without us threading them through args.
+  const buildWorkerEnv = useCallback((): Array<[string, string]> => {
+    const extra: {
+      chip?: string;
+      ramGb?: number;
+      cpuCores?: number;
+      secondsPerImage?: number;
+      suggestedPriceUsdcBase?: string;
+    } = {};
+    if (hardware?.chip) extra.chip = hardware.chip;
+    if (hardware?.ramGb) extra.ramGb = hardware.ramGb;
+    if (hardware?.cpuCores) extra.cpuCores = hardware.cpuCores;
+    if (lastBenchmark && lastBenchmark.secondsPerImage > 0) {
+      extra.secondsPerImage = lastBenchmark.secondsPerImage;
+      // Pick the "fair" $1/hr tier as the heartbeat's suggested price.
+      // The provider can override per-job once provider-set minimums
+      // land on-chain (Sprint 4 escrow polish).
+      extra.suggestedPriceUsdcBase = suggestedPrices(
+        lastBenchmark.secondsPerImage,
+      ).fair.toString();
+    }
+    return settingsToWorkerEnv(settings, extra);
+  }, [settings, hardware, lastBenchmark]);
+
   // Toggle the auto-pause feature. Flipping it off also clears the
   // "we were the one who paused" flag — otherwise re-enabling the
   // feature later would resume a worker the user had stopped on
@@ -416,7 +447,7 @@ function App() {
             config: {
               python_path: settings.pythonPath || null,
               working_dir: settings.workingDir || null,
-              env: settingsToWorkerEnv(settings),
+              env: buildWorkerEnv(),
             },
           });
           setOnline(true);
@@ -479,7 +510,7 @@ function App() {
           config: {
             python_path: settings.pythonPath || null,
             working_dir: settings.workingDir || null,
-            env: settingsToWorkerEnv(settings),
+            env: buildWorkerEnv(),
           },
         });
         setOnline(true);
@@ -500,7 +531,7 @@ function App() {
     } finally {
       setBusy(false);
     }
-  }, [busy, online, settings]);
+  }, [busy, online, settings, buildWorkerEnv]);
 
   return (
     <div className="app-shell">
