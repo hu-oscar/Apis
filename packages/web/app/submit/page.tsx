@@ -18,7 +18,7 @@
 // Provider PDA, accepts the job, runs the workload, uploads to IPFS,
 // and submits completion. The /job/[id] page polls until done.
 
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
@@ -105,7 +105,27 @@ type ProviderState =
   | { kind: "missing"; pda: Address }
   | { kind: "error"; pda: Address; message: string };
 
+// useSearchParams needs a Suspense boundary for static prerender. The
+// inner component holds all the logic; the default export wraps it.
 export default function SubmitPage() {
+  return (
+    <Suspense
+      fallback={
+        <main className="relative min-h-screen overflow-x-clip bg-[#000] text-[#FAFAF9]">
+          <div className="relative z-10 mx-auto flex min-h-screen max-w-3xl items-center justify-center px-6 py-16">
+            <p className="font-mono text-xs uppercase tracking-wider text-white/40">
+              Loading…
+            </p>
+          </div>
+        </main>
+      }
+    >
+      <SubmitPageInner />
+    </Suspense>
+  );
+}
+
+function SubmitPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const providerParam = searchParams.get("provider");
