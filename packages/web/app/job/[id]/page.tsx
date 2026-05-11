@@ -26,7 +26,10 @@ import {
 import { createWalletTransactionSigner } from "@solana/client";
 import type { Address, TransactionSigner } from "@solana/kit";
 
-import { getConfirmCompletionInstructionAsync } from "@/app/lib/apis-program";
+import {
+  getCancelJobInstructionAsync,
+  getConfirmCompletionInstructionAsync,
+} from "@/app/lib/apis-program";
 import { explorerAccountUrl, explorerTxUrl } from "@/app/lib/apis";
 import {
   PINATA_GATEWAY,
@@ -61,7 +64,12 @@ type ApiResp = {
   settled: boolean;
 };
 
-const POLL_MS = 3000;
+// Faster than before (was 3s) so the buyer sees "Funded → Started"
+// snap quickly when the worker picks up. We're under the public
+// devnet RPC's rate limit at 1.5s per page, and Vercel's serverless
+// function billing only kicks in past ~600 invocations / min — well
+// outside hackathon load.
+const POLL_MS = 1500;
 
 // JobStatus enum values (must match programs/apis_program/src/state.rs).
 const STATUS = {
@@ -90,6 +98,7 @@ export default function JobPage() {
   const [data, setData] = useState<ApiResp | null>(null);
   const [fetchErr, setFetchErr] = useState<string | null>(null);
   const [confirmSig, setConfirmSig] = useState<string | null>(null);
+  const [cancelSig, setCancelSig] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [opError, setOpError] = useState<string | null>(null);
 
@@ -133,6 +142,47 @@ export default function JobPage() {
       if (timer) clearInterval(timer);
     };
   }, [fetchOnce, data?.settled, data?.onChain?.status]);
+
+  /**
+   * Cancel a Funded (pre-accept) job and refund the buyer's USDC.
+   * cancel_job only succeeds before the worker has called accept_job —
+   * the on-chain instruction guards on Job.status == Funded. The Job
+   * and EscrowVault accounts get closed (rent refunded to the buyer)
+   * the same way confirm_completion does at the happy-path end.
+   */
+  const handleCancel = async () => {
+    if (!buyerSigner || !data?.onChain) return;
+    if (data.onChain.status !== STATUS.Funded) {
+      setOpError(
+        "Job can only be cancelled before the worker accepts (Funded state).",
+      );
+      return;
+    }
+    setBusy("Cancelling…");
+    setOpError(null);
+    sendTx.reset();
+    try {
+      const ix = await getCancelJobInstructionAsync({
+        buyer: buyerSigner,
+        job: jobPda,
+        usdcMint: USDC_MINT,
+      });
+      const sig = await sendTx.send({
+        instructions: [ix],
+        feePayer: buyerSigner,
+      });
+      setCancelSig(sig);
+      // Re-fetch immediately — the next poll would catch it too but
+      // this keeps the UI snappy.
+      fetchOnce();
+    } catch (err) {
+      setOpError(
+        `cancel_job failed: ${err instanceof Error ? err.message : err}`,
+      );
+    } finally {
+      setBusy(null);
+    }
+  };
 
   const handleConfirm = async () => {
     if (!buyerSigner || !data?.onChain) return;
@@ -209,7 +259,8 @@ export default function JobPage() {
                 key={data.settled ? "settled" : data.onChain?.status ?? "loading"}
                 data={data}
                 onConfirm={handleConfirm}
-                canConfirm={
+                onCancel={handleCancel}
+                canOperate={
                   walletStatus === "connected" &&
                   !!buyerSigner &&
                   !busy &&
@@ -217,6 +268,7 @@ export default function JobPage() {
                 }
                 busyLabel={busy}
                 confirmSig={confirmSig}
+                cancelSig={cancelSig}
               />
             </AnimatePresence>
           </>
@@ -289,43 +341,72 @@ function JobMeta({ data, jobPda }: { data: ApiResp; jobPda: Address }) {
 function PipelineState({
   data,
   onConfirm,
-  canConfirm,
+  onCancel,
+  canOperate,
   busyLabel,
   confirmSig,
+  cancelSig,
 }: {
   data: ApiResp;
   onConfirm: () => void;
-  canConfirm: boolean;
+  onCancel: () => void;
+  canOperate: boolean;
   busyLabel: string | null;
   confirmSig: string | null;
+  cancelSig: string | null;
 }) {
   if (data.settled) {
+    const cancelled = cancelSig !== null;
     return (
       <Card>
-        <SectionTitle>Settlement complete</SectionTitle>
+        <SectionTitle>
+          {cancelled ? "Job cancelled" : "Settlement complete"}
+        </SectionTitle>
         <p className="text-sm text-white/70">
-          Worker + treasury paid out. The Job and EscrowVault accounts have
-          been closed; rent was refunded to the buyer.
+          {cancelled
+            ? "USDC refunded to your wallet. The Job and EscrowVault accounts were closed (rent refunded too)."
+            : "Worker + treasury paid out. The Job and EscrowVault accounts have been closed; rent was refunded to the buyer."}
         </p>
-        {data.result && <ResultImage cid={data.result.cid} />}
+        {!cancelled && data.result && <ResultImage cid={data.result.cid} />}
         {confirmSig && (
           <TxResult label="confirm_completion tx" signature={confirmSig} />
+        )}
+        {cancelSig && (
+          <TxResult label="cancel_job tx" signature={cancelSig} />
         )}
       </Card>
     );
   }
 
   const status = data.onChain?.status ?? -1;
+  const deadline = data.onChain?.deadline ?? null;
 
   if (status === STATUS.Funded) {
     return (
       <Card>
-        <SectionTitle>Waiting for worker to accept…</SectionTitle>
+        <div className="flex flex-wrap items-baseline justify-between gap-3">
+          <SectionTitle>Waiting for worker to accept…</SectionTitle>
+          {deadline !== null && <DeadlineCountdown deadline={deadline} />}
+        </div>
         <Spinner />
         <p className="text-sm text-white/60">
           USDC is locked in the escrow vault. The registered worker should
-          accept this job within a few seconds.
+          accept this job within a few seconds. If you change your mind
+          before they do, you can cancel for a full refund — worker hasn't
+          earned anything yet.
         </p>
+        <div className="flex flex-wrap items-center gap-3 pt-1">
+          <NeonButton
+            onClick={onCancel}
+            disabled={!canOperate}
+            variant="danger"
+          >
+            {busyLabel === "Cancelling…" ? busyLabel : "Cancel & refund"}
+          </NeonButton>
+          {cancelSig && (
+            <TxResult label="cancel_job tx" signature={cancelSig} />
+          )}
+        </div>
       </Card>
     );
   }
@@ -333,11 +414,16 @@ function PipelineState({
   if (status === STATUS.Started) {
     return (
       <Card>
-        <SectionTitle>Generating image…</SectionTitle>
+        <div className="flex flex-wrap items-baseline justify-between gap-3">
+          <SectionTitle>Generating image…</SectionTitle>
+          {deadline !== null && <DeadlineCountdown deadline={deadline} />}
+        </div>
         <Spinner />
         <p className="text-sm text-white/60">
           Worker is running Flux Schnell on Apple Silicon. First-run JIT
           compilation can take a few minutes; warm runs land in ~50s.
+          Once they accept_job, only the auto-release path can refund
+          you — the cancel button is no longer safe.
         </p>
       </Card>
     );
@@ -359,8 +445,12 @@ function PipelineState({
             (No local result file yet — worker may be on a different box.)
           </p>
         )}
-        <NeonButton onClick={onConfirm} disabled={!canConfirm} primary>
-          {busyLabel ?? "Confirm & release USDC"}
+        <NeonButton
+          onClick={onConfirm}
+          disabled={!canOperate}
+          variant="primary"
+        >
+          {busyLabel === "Confirming…" ? busyLabel : "Confirm & release USDC"}
         </NeonButton>
         {confirmSig && (
           <TxResult label="confirm_completion tx" signature={confirmSig} />
@@ -374,9 +464,12 @@ function PipelineState({
       <Card>
         <SectionTitle>Job refunded</SectionTitle>
         <p className="text-sm text-[#FF3B5C]">
-          The buyer cancelled this job before the worker accepted it. USDC
-          was refunded; Job + EscrowVault accounts closed.
+          This job was cancelled before the worker accepted it. USDC was
+          refunded to your wallet; Job + EscrowVault accounts closed.
         </p>
+        {cancelSig && (
+          <TxResult label="cancel_job tx" signature={cancelSig} />
+        )}
       </Card>
     );
   }
@@ -386,7 +479,38 @@ function PipelineState({
       <Card>
         <SectionTitle>Job slashed</SectionTitle>
         <p className="text-sm text-[#FF3B5C]">
-          Worker missed the deadline; bond slashed and buyer refunded.
+          Worker missed the deadline. Their bond was slashed and your USDC
+          was refunded automatically — nothing more for you to do.
+        </p>
+      </Card>
+    );
+  }
+
+  if (status === STATUS.Disputed) {
+    return (
+      <Card>
+        <SectionTitle>Job disputed</SectionTitle>
+        <p className="text-sm text-[#FF3B5C]">
+          A dispute was raised on this job. Both buyer and worker funds
+          are locked until the dispute resolves. Dispute resolution UI
+          lands in Sprint 4 of the verification layer.
+        </p>
+      </Card>
+    );
+  }
+
+  if (status === STATUS.Created) {
+    // Rare — create_job locks USDC and transitions directly to Funded.
+    // If we see Created in the wild, it's a race between the tx
+    // confirmation and our poll. Show a soft "settling" state.
+    return (
+      <Card>
+        <SectionTitle>Job submitted, locking escrow…</SectionTitle>
+        <Spinner />
+        <p className="text-sm text-white/60">
+          The <code>create_job</code> tx is confirming. As soon as it
+          lands, USDC moves into the escrow vault and the worker can
+          accept.
         </p>
       </Card>
     );
@@ -398,6 +522,56 @@ function PipelineState({
       <Spinner />
     </Card>
   );
+}
+
+// ── Deadline countdown (Sprint 3.3) ─────────────────────────────────
+//
+// Ticks every second so the user can see exactly how much time the
+// worker has left to accept / complete before the on-chain auto-release
+// path could refund them. Three visual states:
+//   - >60s left   → muted white, just "expires in Xm Ys"
+//   - <60s left   → amber, drawing attention to the imminent timeout
+//   - past deadline → red "expired Xm ago"
+//
+// Pure with respect to the `deadline` prop; only `now` is driven by
+// the interval — keeps re-renders cheap.
+function DeadlineCountdown({ deadline }: { deadline: number }) {
+  const [now, setNow] = useState<number>(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  const remainingMs = deadline * 1000 - now;
+  if (remainingMs <= 0) {
+    return (
+      <span className="font-mono text-[10px] uppercase tracking-wider text-[#FF3B5C]">
+        expired {formatShortDuration(-remainingMs)} ago
+      </span>
+    );
+  }
+  const warn = remainingMs < 60_000;
+  return (
+    <span
+      className={
+        warn
+          ? "font-mono text-[10px] uppercase tracking-wider text-[#FBBF24]"
+          : "font-mono text-[10px] uppercase tracking-wider text-white/55"
+      }
+    >
+      expires in {formatShortDuration(remainingMs)}
+    </span>
+  );
+}
+
+function formatShortDuration(ms: number): string {
+  const totalSec = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
 }
 
 function ResultImage({ cid }: { cid: string }) {
@@ -484,25 +658,30 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
 function NeonButton({
   onClick,
   disabled,
-  primary,
+  variant,
   children,
 }: {
   onClick: () => void;
   disabled?: boolean;
-  primary?: boolean;
+  /** "primary" = green CTA (Confirm). "danger" = red outline (Cancel).
+   *  Omitted = neutral white outline (currently unused but kept for
+   *  future buttons). */
+  variant?: "primary" | "danger";
   children: React.ReactNode;
 }) {
+  const cls =
+    variant === "primary"
+      ? "inline-flex items-center justify-center rounded-lg bg-[#14F195] px-5 py-2.5 font-mono text-sm font-semibold uppercase tracking-wider text-black shadow-[0_0_30px_-5px_rgba(20,241,149,0.6)] transition disabled:cursor-not-allowed disabled:bg-[#14F195]/30 disabled:shadow-none"
+      : variant === "danger"
+        ? "inline-flex items-center justify-center rounded-lg border border-[#FF3B5C]/40 bg-[#FF3B5C]/[0.05] px-5 py-2.5 font-mono text-sm uppercase tracking-wider text-[#FF3B5C] transition hover:border-[#FF3B5C]/70 hover:bg-[#FF3B5C]/[0.1] disabled:cursor-not-allowed disabled:opacity-40"
+        : "inline-flex items-center justify-center rounded-lg border border-white/15 bg-white/[0.02] px-5 py-2.5 font-mono text-sm uppercase tracking-wider text-white/80 transition hover:border-white/30 disabled:cursor-not-allowed disabled:opacity-40";
   return (
     <motion.button
       whileHover={disabled ? {} : { scale: 1.02 }}
       whileTap={disabled ? {} : { scale: 0.98 }}
       onClick={onClick}
       disabled={disabled}
-      className={
-        primary
-          ? "inline-flex items-center justify-center rounded-lg bg-[#14F195] px-5 py-2.5 font-mono text-sm font-semibold uppercase tracking-wider text-black shadow-[0_0_30px_-5px_rgba(20,241,149,0.6)] transition disabled:cursor-not-allowed disabled:bg-[#14F195]/30 disabled:shadow-none"
-          : "inline-flex items-center justify-center rounded-lg border border-white/15 bg-white/[0.02] px-5 py-2.5 font-mono text-sm uppercase tracking-wider text-white/80 transition hover:border-white/30 disabled:cursor-not-allowed disabled:opacity-40"
-      }
+      className={cls}
     >
       {children}
     </motion.button>
