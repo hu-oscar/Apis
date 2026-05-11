@@ -9,6 +9,7 @@ use std::sync::Arc;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_store::Builder::default().build())
         .manage(Arc::new(worker::WorkerState::new()))
         .invoke_handler(tauri::generate_handler![
             worker::start_worker,
