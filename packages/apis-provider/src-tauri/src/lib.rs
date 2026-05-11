@@ -1,7 +1,9 @@
 // Apis Provider — Tauri shell that manages the apis_worker Python
 // subprocess and exposes a small command surface to the React UI.
 
+mod benchmark;
 mod gpu_monitor;
+mod hw_detect;
 mod tray;
 mod worker;
 
@@ -42,6 +44,8 @@ pub fn run() {
             worker::derive_provider_pda,
             worker::register_provider_subprocess,
             tray::set_tray_state,
+            hw_detect::detect_hardware,
+            benchmark::run_benchmark,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -746,6 +746,83 @@ body,
   background: var(--warn-red);
 }
 
+/* ── Benchmark card (Sprint 2.10) ────────────────────────────────── */
+
+.benchmark-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.benchmark-run {
+  flex: 1;
+  padding: 8px 12px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  background: var(--solana-green);
+  color: #000;
+  border: 1px solid var(--solana-green);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: 120ms ease;
+}
+
+.benchmark-run:hover:not(:disabled) {
+  background: transparent;
+  color: var(--solana-green);
+}
+
+.benchmark-run:disabled {
+  opacity: 0.5;
+  cursor: progress;
+}
+
+.benchmark-run.secondary {
+  background: transparent;
+  color: var(--white-60);
+  border-color: var(--white-15);
+}
+
+.benchmark-run.secondary:hover:not(:disabled) {
+  color: var(--fg);
+  border-color: var(--white-40);
+}
+
+.benchmark-prices {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--white-05);
+}
+
+.benchmark-price-tier {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.benchmark-price-label {
+  color: var(--white-60);
+}
+
+.benchmark-price-value.green {
+  color: var(--solana-green);
+}
+
+.benchmark-price-value.violet {
+  color: var(--neon-violet);
+}
+
+.benchmark-price-value.dim {
+  color: var(--white-40);
+}
+
 /* ── GPU contention toggle (Sprint 2.9) ──────────────────────────── */
 
 .gpu-toggle {
