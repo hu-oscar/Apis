@@ -1,22 +1,28 @@
-// Apis Provider — Sprint 2.2 wires the worker subprocess.
+// Apis Provider — Sprints 2.1 → 2.3.
 //
-// The top-bar online toggle now actually starts and stops the
-// apis_worker child process. Worker stdout/stderr stream into the
-// right-pane log via Tauri events.
+//   2.1 — Cyberpunk Swarm UI shell (top bar / left rail / log pane / status bar)
+//   2.2 — start_worker / stop_worker / worker-log event streaming
+//   2.3 — persistent settings store (Tauri Store plugin) + settings drawer;
+//         settings flow into the env passed to start_worker.
 //
-// Subsequent sprints layer on top of this:
-//   2.3 — settings drawer for HF_TOKEN, PINATA_JWT, APIS_API_BASE,
-//         keypair path; populates the env passed to start_worker
+// Coming up:
 //   2.4 — parse stdout for JobCreated / accept_job / submit_completion
-//         and render a tidy event timeline alongside the raw log
-//   2.5 — read the on-chain Provider PDA and surface registered/active
-//         + active_jobs counters in the left rail
-//   2.6 — bundle as a .app + first-launch onboarding wizard
+//         and render an event timeline.
+//   2.5 — read the on-chain Provider PDA and render real registered/
+//         active status + counters in the left rail.
+//   2.6 — `tauri build` → unsigned .dmg + first-launch onboarding wizard.
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import "./App.css";
+import {
+  DEFAULT_SETTINGS,
+  loadSettings,
+  saveSettings,
+  settingsToWorkerEnv,
+  type Settings,
+} from "./lib/settings";
 
 type LogEntry = {
   stream: "stdout" | "stderr";
@@ -24,9 +30,6 @@ type LogEntry = {
   at: number;
 };
 
-// Wire log entries to a coarse severity for colorization. Matches the
-// apis_worker log format which uses `[INFO]` / `[WARN]` / `[ERROR]` /
-// `[DEBUG]` brackets. Anything from stderr we treat as at least warn.
 function severityFor(entry: LogEntry): "event" | "warn" | "error" | "dim" {
   const line = entry.line;
   if (entry.stream === "stderr" && /Traceback|Error/i.test(line)) return "error";
@@ -47,9 +50,23 @@ function App() {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const logScrollRef = useRef<HTMLDivElement>(null);
 
-  // Subscribe to worker-log events from Rust. Tauri's listen returns a
-  // promise resolving to an unlisten fn; we collect it and call on
-  // cleanup so React strict-mode mounts/unmounts don't double-subscribe.
+  // Settings: loaded on mount, edited in the drawer, saved via the
+  // Tauri Store plugin (writes JSON to the app's local data dir).
+  const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const s = await loadSettings();
+      if (!cancelled) setSettings(s);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Subscribe to worker-log events.
   useEffect(() => {
     let cancelled = false;
     let unlisten: (() => void) | null = null;
@@ -57,7 +74,6 @@ function App() {
       const off = await listen<LogEntry>("worker-log", (event) => {
         setLogs((prev) => {
           const next = [...prev, event.payload];
-          // Cap the buffer so a long-running worker doesn't bloat memory.
           return next.length > MAX_LOG_LINES
             ? next.slice(next.length - MAX_LOG_LINES)
             : next;
@@ -82,8 +98,7 @@ function App() {
     }
   }, [logs]);
 
-  // Reconcile UI state with actual worker state every 5 s — catches
-  // the case where the child died on its own (HF auth, GPU panic, etc).
+  // Reconcile UI state with actual worker state every 5 s.
   useEffect(() => {
     let cancelled = false;
     const probe = async () => {
@@ -91,7 +106,7 @@ function App() {
         const alive = await invoke<boolean>("worker_status");
         if (!cancelled) setOnline(alive);
       } catch {
-        /* swallow — UI shows current cached state */
+        /* swallow */
       }
     };
     void probe();
@@ -113,12 +128,9 @@ function App() {
       } else {
         await invoke("start_worker", {
           config: {
-            // Sprint 2.3 will replace these with values from a settings
-            // store. For 2.2 we hardcode the dev-machine layout — the
-            // worker venv next to the Tauri app under packages/worker.
-            python_path: null,
-            working_dir: null,
-            env: [],
+            python_path: settings.pythonPath || null,
+            working_dir: settings.workingDir || null,
+            env: settingsToWorkerEnv(settings),
           },
         });
         setOnline(true);
@@ -137,17 +149,22 @@ function App() {
     } finally {
       setBusy(false);
     }
-  }, [busy, online]);
+  }, [busy, online, settings]);
 
   return (
     <div className="app-shell">
-      <TopBar online={online} busy={busy} onToggle={handleToggle} />
+      <TopBar
+        online={online}
+        busy={busy}
+        onToggle={handleToggle}
+        onOpenSettings={() => setSettingsOpen(true)}
+      />
 
       <main className="main">
         <aside className="left-col">
           <ProviderCard />
           <EarningsCard />
-          <NetworkCard />
+          <NetworkCard apiBase={settings.apisApiBase} />
         </aside>
 
         <section className="right-col">
@@ -156,6 +173,17 @@ function App() {
       </main>
 
       <StatusBar online={online} />
+
+      {settingsOpen && (
+        <SettingsDrawer
+          initial={settings}
+          onClose={() => setSettingsOpen(false)}
+          onSaved={(next) => {
+            setSettings(next);
+            setSettingsOpen(false);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -166,10 +194,12 @@ function TopBar({
   online,
   busy,
   onToggle,
+  onOpenSettings,
 }: {
   online: boolean;
   busy: boolean;
   onToggle: () => void;
+  onOpenSettings: () => void;
 }) {
   return (
     <header className="topbar">
@@ -189,7 +219,12 @@ function TopBar({
           <span className="dot" />
           {busy ? "…" : online ? "online" : "offline"}
         </button>
-        <button className="settings-btn" title="Settings" type="button">
+        <button
+          className="settings-btn"
+          title="Settings"
+          type="button"
+          onClick={onOpenSettings}
+        >
           ⚙
         </button>
       </div>
@@ -197,7 +232,197 @@ function TopBar({
   );
 }
 
-// ── Left-rail cards (placeholder — wired in Sprints 2.5 / 2.4) ──────
+// ── Settings drawer ──────────────────────────────────────────────────
+
+function SettingsDrawer({
+  initial,
+  onClose,
+  onSaved,
+}: {
+  initial: Settings;
+  onClose: () => void;
+  onSaved: (next: Settings) => void;
+}) {
+  const [draft, setDraft] = useState<Settings>(initial);
+  const [status, setStatus] = useState<"idle" | "saving" | "saved" | "error">(
+    "idle",
+  );
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  const setField =
+    (key: keyof Settings) =>
+    (e: React.ChangeEvent<HTMLInputElement>) =>
+      setDraft((d) => ({ ...d, [key]: e.target.value }));
+
+  const handleSave = async () => {
+    setStatus("saving");
+    setErrorMsg(null);
+    try {
+      await saveSettings(draft);
+      setStatus("saved");
+      // Close after a tiny delay so the "saved ✓" registers visually.
+      setTimeout(() => onSaved(draft), 200);
+    } catch (e) {
+      setStatus("error");
+      setErrorMsg(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  return (
+    <>
+      <div className="settings-backdrop" onClick={onClose} />
+      <aside
+        className="settings-drawer"
+        role="dialog"
+        aria-label="Settings"
+      >
+        <header className="settings-header">
+          <h2>Settings</h2>
+          <button
+            className="settings-close"
+            onClick={onClose}
+            aria-label="Close"
+            type="button"
+          >
+            ×
+          </button>
+        </header>
+
+        <div className="settings-body">
+          <Field
+            label="HuggingFace token"
+            value={draft.hfToken}
+            onChange={setField("hfToken")}
+            placeholder="hf_…"
+            hint={
+              <>
+                Required to download <code>FLUX.1-schnell</code>. Create one at{" "}
+                <code>huggingface.co/settings/tokens</code> with Read scope.
+              </>
+            }
+          />
+          <Field
+            label="Pinata JWT"
+            value={draft.pinataJwt}
+            onChange={setField("pinataJwt")}
+            placeholder="eyJhbGciOi…"
+            hint={
+              <>
+                Required to upload result PNGs to IPFS. Files: Write scope at{" "}
+                <code>app.pinata.cloud/developers/api-keys</code>.
+              </>
+            }
+          />
+          <Field
+            label="Apis API base"
+            value={draft.apisApiBase}
+            onChange={setField("apisApiBase")}
+            placeholder="https://apis-web-five.vercel.app"
+            hint={
+              <>
+                URL of the deployed Apis web app. Worker fetches specs +
+                posts results + posts heartbeat here. Leave empty for local-only.
+              </>
+            }
+          />
+          <Field
+            label="Worker keypair path"
+            value={draft.workerKeypair}
+            onChange={setField("workerKeypair")}
+            placeholder="~/.config/apis/worker.json"
+            hint={
+              <>
+                Solana keypair for the worker. Generate via{" "}
+                <code>solana-keygen new --outfile ~/.config/apis/worker.json</code>.
+              </>
+            }
+          />
+          <Field
+            label="Python interpreter"
+            value={draft.pythonPath}
+            onChange={setField("pythonPath")}
+            placeholder="(empty = python3 on PATH)"
+            hint={
+              <>
+                Path to a Python that has <code>apis_worker</code> installed —
+                typically <code>packages/worker/.venv/bin/python</code>.
+              </>
+            }
+          />
+          <Field
+            label="Working directory"
+            value={draft.workingDir}
+            onChange={setField("workingDir")}
+            placeholder="(empty = current dir)"
+            hint={
+              <>
+                Working dir for the spawned worker, usually{" "}
+                <code>packages/worker</code>.
+              </>
+            }
+          />
+        </div>
+
+        <footer className="settings-footer">
+          <span
+            className={
+              status === "saved"
+                ? "settings-status ok"
+                : status === "error"
+                  ? "settings-status error"
+                  : "settings-status"
+            }
+          >
+            {status === "saving" && "Saving…"}
+            {status === "saved" && "Saved ✓"}
+            {status === "error" && (errorMsg ?? "Save failed")}
+            {status === "idle" && "Persisted to app data dir"}
+          </span>
+          <button
+            className="settings-save"
+            onClick={handleSave}
+            disabled={status === "saving"}
+            type="button"
+          >
+            {status === "saving" ? "Saving…" : "Save"}
+          </button>
+        </footer>
+      </aside>
+    </>
+  );
+}
+
+function Field({
+  label,
+  value,
+  onChange,
+  placeholder,
+  hint,
+}: {
+  label: string;
+  value: string;
+  onChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  placeholder?: string;
+  hint?: React.ReactNode;
+}) {
+  return (
+    <div className="settings-field">
+      <label>{label}</label>
+      <input
+        type="text"
+        value={value}
+        onChange={onChange}
+        placeholder={placeholder}
+        spellCheck={false}
+        autoCapitalize="off"
+        autoCorrect="off"
+      />
+      {hint && <div className="hint">{hint}</div>}
+    </div>
+  );
+}
+
+// ── Left-rail cards ──────────────────────────────────────────────────
 
 function ProviderCard() {
   return (
@@ -247,7 +472,7 @@ function EarningsCard() {
   );
 }
 
-function NetworkCard() {
+function NetworkCard({ apiBase }: { apiBase: string }) {
   return (
     <div className="card">
       <h3>Network</h3>
@@ -260,11 +485,21 @@ function NetworkCard() {
         <span className="kv-value">2qe8YXc…SiH868mhf</span>
       </div>
       <div className="kv-row">
-        <span className="kv-label">RPC</span>
-        <span className="kv-value dim">public devnet</span>
+        <span className="kv-label">API base</span>
+        <span className={apiBase ? "kv-value" : "kv-value dim"}>
+          {apiBase ? prettyHost(apiBase) : "local-only"}
+        </span>
       </div>
     </div>
   );
+}
+
+function prettyHost(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
 }
 
 // ── Logs ─────────────────────────────────────────────────────────────
