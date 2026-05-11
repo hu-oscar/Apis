@@ -17,7 +17,7 @@ import {
   getBase58Decoder,
   type Address,
 } from "@solana/kit";
-import { useSolanaClient, useWalletConnection } from "@solana/react-hooks";
+import { useSolanaClient } from "@solana/react-hooks";
 import { ArrowRight, Cpu, Wallet } from "lucide-react";
 
 import { APIS_PROGRAM_PROGRAM_ADDRESS } from "@/app/lib/apis-program";
@@ -27,7 +27,7 @@ import { explorerAccountUrl } from "@/app/lib/apis";
 import { WORKER_PROVIDER_PDA } from "@/app/lib/constants";
 import { fetchHeartbeat, type HeartbeatStatus } from "@/app/lib/heartbeat-client";
 import { AnomalousMatterHero } from "@/app/components/ui/anomalous-matter-hero";
-import { ApisLogo } from "@/app/components/ui/apis-logo";
+import { NavBar } from "@/app/components/ui/navbar";
 import { Globe } from "@/app/components/ui/cobe-globe";
 import { MarketplaceFlow } from "@/app/components/marketplace-flow";
 
@@ -164,7 +164,11 @@ export default function Home() {
       {/* Hero is full-viewport. The nav is rendered inside its topSlot
           so it overlays the canvas without needing a sticky bar. */}
       <AnomalousMatterHero
-        topSlot={<Nav />}
+        topSlot={
+          <div className="mx-auto max-w-5xl px-6 pt-8">
+            <NavBar active="home" />
+          </div>
+        }
         eyebrow="Permissionless · open · settled on Solana"
         title={
           <>
@@ -219,80 +223,6 @@ export default function Home() {
   );
 }
 
-// ─── Nav ────────────────────────────────────────────────────────────────
-
-function Nav() {
-  return (
-    <nav className="mx-auto flex max-w-5xl items-center justify-between px-6 pt-8">
-      <Link href="/" className="group flex items-center gap-2.5">
-        <ApisLogo size={26} className="transition group-hover:scale-105" />
-        <span className="font-mono text-lg font-bold tracking-tight text-[#FAFAF9] transition group-hover:text-[#14F195]">
-          apis
-        </span>
-        <span className="rounded bg-[#9945FF]/20 px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-[#9945FF]">
-          devnet
-        </span>
-      </Link>
-      <div className="flex items-center gap-5">
-        <Link
-          href="/network"
-          className="hidden font-mono text-xs uppercase tracking-wider text-white/65 transition hover:text-[#14F195] sm:inline-block"
-        >
-          network
-        </Link>
-        <Link
-          href="/stats"
-          className="hidden font-mono text-xs uppercase tracking-wider text-white/65 transition hover:text-[#14F195] sm:inline-block"
-        >
-          stats
-        </Link>
-        <Link
-          href="/history"
-          className="hidden font-mono text-xs uppercase tracking-wider text-white/65 transition hover:text-[#14F195] sm:inline-block"
-        >
-          history
-        </Link>
-        <Link
-          href="/submit"
-          className="hidden font-mono text-xs uppercase tracking-wider text-white/65 transition hover:text-[#14F195] sm:inline-block"
-        >
-          submit
-        </Link>
-        <NavWalletButton />
-      </div>
-    </nav>
-  );
-}
-
-function NavWalletButton() {
-  const { wallet, status, connectors, connect, disconnect } =
-    useWalletConnection();
-  const address = wallet?.account.address;
-
-  if (status === "connected" && address) {
-    return (
-      <button
-        onClick={() => disconnect()}
-        className="rounded-lg border border-[#14F195]/30 bg-[#14F195]/[0.05] px-3 py-1.5 font-mono text-xs text-[#14F195] transition hover:bg-[#14F195]/[0.1]"
-      >
-        {address.slice(0, 4)}…{address.slice(-4)} ✕
-      </button>
-    );
-  }
-
-  const phantom = connectors.find((c) => c.name.toLowerCase().includes("phantom"));
-  const target = phantom ?? connectors[0];
-
-  return (
-    <button
-      onClick={() => target && connect(target.id)}
-      disabled={!target || status === "connecting"}
-      className="rounded-lg bg-[#14F195] px-4 py-1.5 font-mono text-xs font-semibold uppercase tracking-wider text-black shadow-[0_0_24px_-6px_rgba(20,241,149,0.6)] transition hover:bg-[#14F195]/90 disabled:cursor-not-allowed disabled:opacity-40"
-    >
-      {status === "connecting" ? "Connecting…" : "Connect wallet"}
-    </button>
-  );
-}
 
 // ─── Network globe ─────────────────────────────────────────────────────
 

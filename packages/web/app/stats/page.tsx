@@ -38,7 +38,7 @@ import {
 import { ProviderStatus } from "@/app/lib/generated/apis-program/src/generated/types/providerStatus";
 import { JobStatus } from "@/app/lib/generated/apis-program/src/generated/types/jobStatus";
 import { formatUsdc } from "@/app/lib/constants";
-import { ApisLogo } from "@/app/components/ui/apis-logo";
+import { NavBar } from "@/app/components/ui/navbar";
 import {
   fetchHeartbeat,
   type HeartbeatRecord,
@@ -79,6 +79,11 @@ const POLL_MS = 30_000;
 export default function StatsPage() {
   const client = useSolanaClient();
   const [state, setState] = useState<State>({ kind: "loading" });
+  // Manual-retry trigger — bumped by the error-state retry button.
+  // useEffect re-runs whenever it changes, kicking off a fresh fetch
+  // cycle. Lets the user recover from a transient RPC failure
+  // without reloading the page.
+  const [retryNonce, setRetryNonce] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -277,14 +282,14 @@ export default function StatsPage() {
       cancelled = true;
       clearInterval(id);
     };
-  }, [client]);
+  }, [client, retryNonce]);
 
   return (
     <main className="relative min-h-screen overflow-x-clip bg-[#000] text-[#FAFAF9]">
       <HexGridBackground />
 
       <div className="relative z-10 mx-auto flex min-h-screen max-w-5xl flex-col px-6 py-8">
-        <Nav />
+        <NavBar active="stats" />
 
         <header className="space-y-3 py-12">
           <p className="font-mono text-xs uppercase tracking-[0.22em] text-[#9945FF]">
@@ -302,7 +307,15 @@ export default function StatsPage() {
         </header>
 
         {state.kind === "loading" && <LoadingStats />}
-        {state.kind === "error" && <ErrorBanner message={state.message} />}
+        {state.kind === "error" && (
+          <ErrorBanner
+            message={state.message}
+            onRetry={() => {
+              setState({ kind: "loading" });
+              setRetryNonce((n) => n + 1);
+            }}
+          />
+        )}
         {state.kind === "ok" && (
           <StatsBody snap={state.snap} fetchedAt={state.fetchedAt} />
         )}
@@ -534,51 +547,31 @@ function LoadingStats() {
   );
 }
 
-function ErrorBanner({ message }: { message: string }) {
+function ErrorBanner({
+  message,
+  onRetry,
+}: {
+  message: string;
+  onRetry: () => void;
+}) {
   return (
-    <div className="rounded-xl border border-[#FF3B5C]/30 bg-[#FF3B5C]/[0.05] p-6 font-mono text-xs text-[#FF3B5C]">
-      Failed to load network stats: {message}
+    <div className="space-y-4 rounded-xl border border-[#FF3B5C]/30 bg-[#FF3B5C]/[0.05] p-6 font-mono text-xs text-[#FF3B5C]">
+      <p>
+        Failed to load network stats:{" "}
+        <span className="text-white/70">{message}</span>
+      </p>
+      <button
+        type="button"
+        onClick={onRetry}
+        className="inline-flex items-center gap-1.5 rounded-md border border-[#FF3B5C]/40 bg-[#FF3B5C]/[0.1] px-3 py-1.5 uppercase tracking-wider text-[#FF3B5C] transition hover:bg-[#FF3B5C]/[0.18]"
+      >
+        Try again
+      </button>
     </div>
   );
 }
 
-// ─── Nav + chrome ──────────────────────────────────────────────────
-
-function Nav() {
-  return (
-    <nav className="flex items-center justify-between pb-8">
-      <Link href="/" className="flex items-center gap-2.5 group">
-        <ApisLogo size={26} className="transition group-hover:scale-105" />
-        <span className="font-mono text-lg font-bold tracking-tight text-[#FAFAF9] group-hover:text-[#14F195] transition">
-          apis
-        </span>
-        <span className="rounded bg-[#9945FF]/20 px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-[#9945FF]">
-          devnet
-        </span>
-      </Link>
-      <div className="flex items-center gap-4">
-        <Link
-          href="/network"
-          className="font-mono text-xs uppercase tracking-wider text-white/60 transition hover:text-[#14F195]"
-        >
-          network
-        </Link>
-        <Link
-          href="/stats"
-          className="font-mono text-xs uppercase tracking-wider text-[#14F195]"
-        >
-          stats
-        </Link>
-        <Link
-          href="/submit"
-          className="font-mono text-xs uppercase tracking-wider text-white/60 transition hover:text-[#14F195]"
-        >
-          submit
-        </Link>
-      </div>
-    </nav>
-  );
-}
+// ─── Chrome ────────────────────────────────────────────────────────
 
 function HexGridBackground() {
   return (
