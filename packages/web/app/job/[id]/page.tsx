@@ -30,6 +30,7 @@ import {
   getCancelJobInstructionAsync,
   getConfirmCompletionInstructionAsync,
 } from "@/app/lib/apis-program";
+import { HexSwarm } from "@/app/components/ui/hex-swarm";
 import { explorerAccountUrl, explorerTxUrl } from "@/app/lib/apis";
 import {
   PINATA_GATEWAY,
@@ -388,7 +389,7 @@ function PipelineState({
           <SectionTitle>Waiting for worker to accept…</SectionTitle>
           {deadline !== null && <DeadlineCountdown deadline={deadline} />}
         </div>
-        <Spinner />
+        <HexSwarm />
         <p className="text-sm text-white/60">
           USDC is locked in the escrow vault. The registered worker should
           accept this job within a few seconds. If you change your mind
@@ -418,7 +419,7 @@ function PipelineState({
           <SectionTitle>Generating image…</SectionTitle>
           {deadline !== null && <DeadlineCountdown deadline={deadline} />}
         </div>
-        <Spinner />
+        <HexSwarm />
         <p className="text-sm text-white/60">
           Worker is running Flux Schnell on Apple Silicon. First-run JIT
           compilation can take a few minutes; warm runs land in ~50s.
@@ -506,7 +507,7 @@ function PipelineState({
     return (
       <Card>
         <SectionTitle>Job submitted, locking escrow…</SectionTitle>
-        <Spinner />
+        <HexSwarm />
         <p className="text-sm text-white/60">
           The <code>create_job</code> tx is confirming. As soon as it
           lands, USDC moves into the escrow vault and the worker can
@@ -519,7 +520,7 @@ function PipelineState({
   return (
     <Card>
       <SectionTitle>Loading…</SectionTitle>
-      <Spinner />
+      <HexSwarm />
     </Card>
   );
 }
@@ -628,12 +629,6 @@ function Row({
         <span className="break-all text-white/80">{value}</span>
       )}
     </div>
-  );
-}
-
-function Spinner() {
-  return (
-    <div className="flex h-6 w-6 animate-spin items-center justify-center rounded-full border-2 border-[#14F195]/30 border-t-[#14F195]" />
   );
 }
 

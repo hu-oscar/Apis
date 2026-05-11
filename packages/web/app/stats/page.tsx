@@ -16,7 +16,7 @@
 // One `getProgramAccounts` request per account type + a heartbeat
 // fetch per provider, polled every 30s — same shape as /network.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { motion } from "framer-motion";
 import {
@@ -398,9 +398,11 @@ function StatsBody({
 }
 
 /** Big animated counter — the headline "lifetime inferences served"
- *  number. Per Tech Design §5 ("NorthStarCounter") — animated to give
- *  the page real motion. */
+ *  number. Per Tech Design §5 ("NorthStarCounter") — counts up from
+ *  the previous value to the new one on every snapshot change, so
+ *  the page has real motion every refresh, not just on first paint. */
 function NorthStar({ value }: { value: number }) {
+  const displayed = useCountUp(value, 1200);
   return (
     <motion.div
       initial={{ opacity: 0, y: 12 }}
@@ -411,8 +413,11 @@ function NorthStar({ value }: { value: number }) {
       <p className="font-mono text-[11px] uppercase tracking-[0.3em] text-[#14F195]">
         lifetime inferences served
       </p>
-      <p className="font-mono text-6xl font-bold tracking-tight text-[#FAFAF9] md:text-7xl">
-        {value.toLocaleString()}
+      <p
+        className="font-mono text-6xl font-bold tracking-tight text-[#FAFAF9] md:text-7xl"
+        aria-live="polite"
+      >
+        {displayed.toLocaleString()}
       </p>
       <p className="font-mono text-[10px] text-white/40">
         sum of <code>Provider.total_jobs</code> across every registered
@@ -420,6 +425,57 @@ function NorthStar({ value }: { value: number }) {
       </p>
     </motion.div>
   );
+}
+
+/** Smoothly animate a numeric value toward `target` over `durationMs`.
+ *  Uses requestAnimationFrame so the easing is frame-paced (no
+ *  setInterval jitter). Eased with the standard cubic ease-out so it
+ *  decelerates into the final value. Re-targets on every prop change,
+ *  so polling updates also animate.
+ *
+ *  Skips the animation entirely when the user has
+ *  `prefers-reduced-motion: reduce` set — they get the final number
+ *  immediately. */
+function useCountUp(target: number, durationMs: number): number {
+  const [value, setValue] = useState<number>(target);
+  const rafRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    // Honor reduced-motion preference.
+    if (
+      typeof window !== "undefined" &&
+      window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
+    ) {
+      setValue(target);
+      return;
+    }
+
+    const startTs = performance.now();
+    const startVal = value;
+    const delta = target - startVal;
+    if (delta === 0) return;
+
+    const step = (ts: number) => {
+      const elapsed = ts - startTs;
+      const t = Math.min(1, elapsed / durationMs);
+      // ease-out cubic — decelerates as it approaches.
+      const eased = 1 - Math.pow(1 - t, 3);
+      setValue(Math.round(startVal + delta * eased));
+      if (t < 1) {
+        rafRef.current = requestAnimationFrame(step);
+      }
+    };
+    rafRef.current = requestAnimationFrame(step);
+    return () => {
+      if (rafRef.current !== null) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [target, durationMs]);
+
+  return value;
 }
 
 function BigStat({
