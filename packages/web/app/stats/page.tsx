@@ -39,6 +39,7 @@ import { ProviderStatus } from "@/app/lib/generated/apis-program/src/generated/t
 import { JobStatus } from "@/app/lib/generated/apis-program/src/generated/types/jobStatus";
 import { formatUsdc } from "@/app/lib/constants";
 import { NavBar } from "@/app/components/ui/navbar";
+import { LoadingPanel } from "@/app/components/ui/loading-panel";
 import {
   fetchHeartbeat,
   type HeartbeatRecord,
@@ -588,9 +589,16 @@ function TopProviderRow({
 }
 
 function LoadingStats() {
+  // HexSwarm-driven loader plus the same skeleton shape underneath
+  // so the page still hints at where the NorthStar + stat cards
+  // will land. Compound feedback: motion (the swarm) + structure
+  // (the skeletons) + copy (the hint).
   return (
     <div className="space-y-6">
-      <div className="h-44 animate-pulse rounded-2xl border border-white/5 bg-white/[0.02]" />
+      <LoadingPanel
+        label="fetching network telemetry"
+        hint="first load can take ~5s — counts come from getProgramAccounts + 1 heartbeat per provider"
+      />
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         {Array.from({ length: 4 }, (_, i) => (
           <div
