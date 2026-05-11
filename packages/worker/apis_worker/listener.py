@@ -82,9 +82,12 @@ async def listen_for_jobs() -> None:
 
     # Background liveness heartbeat — runs alongside the WS listener.
     # Posts to ${APIS_API_BASE}/api/heartbeat/<pda> every 30s; the UI
-    # reads it for the real "online" indicator. No-op if APIS_API_BASE
-    # is unset (local-only dev).
-    hb_task = asyncio.create_task(heartbeat_loop(str(our_provider_pda)))
+    # reads it for the real "online" indicator + hardware/benchmark
+    # display. Signed with the worker keypair so the web side can
+    # reject spoofed posts. No-op if APIS_API_BASE is unset.
+    hb_task = asyncio.create_task(
+        heartbeat_loop(str(our_provider_pda), worker_keypair),
+    )
 
     backoff = _RECONNECT_INITIAL_BACKOFF_S
     while True:

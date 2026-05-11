@@ -91,14 +91,45 @@ export async function saveSettings(next: Settings): Promise<void> {
   await store.save();
 }
 
-/** Convert Settings into the `env` tuple list that `start_worker`
- *  accepts. Skips empty fields so the spawned worker falls back to
- *  whatever's in the host process env (useful for dev). */
-export function settingsToWorkerEnv(s: Settings): Array<[string, string]> {
+/** Convert Settings (+ optional hardware/benchmark context) into the
+ *  `env` tuple list that `start_worker` accepts. Skips empty fields so
+ *  the spawned worker falls back to whatever's in the host process env
+ *  (useful for dev).
+ *
+ *  The hardware + benchmark fields drive the signed heartbeat payload
+ *  the worker posts every 30 s — without them, buyer-facing provider
+ *  cards on the web app show no chip / RAM / speed. The desktop app
+ *  has all this data natively (it ran `detect_hardware` + the user's
+ *  Flux benchmark); we just need to forward it through the spawn. */
+export function settingsToWorkerEnv(
+  s: Settings,
+  extra?: {
+    chip?: string;
+    ramGb?: number;
+    cpuCores?: number;
+    secondsPerImage?: number;
+    /** USDC base units (6 decimals), as a decimal string to preserve
+     *  u64 precision through JSON. */
+    suggestedPriceUsdcBase?: string;
+  },
+): Array<[string, string]> {
   const env: Array<[string, string]> = [];
   if (s.hfToken) env.push(["HF_TOKEN", s.hfToken]);
   if (s.pinataJwt) env.push(["PINATA_JWT", s.pinataJwt]);
   if (s.apisApiBase) env.push(["APIS_API_BASE", s.apisApiBase]);
   if (s.workerKeypair) env.push(["APIS_WORKER_KEYPAIR", s.workerKeypair]);
+
+  if (extra?.chip) env.push(["APIS_PROVIDER_CHIP", extra.chip]);
+  if (extra?.ramGb) env.push(["APIS_PROVIDER_RAM_GB", String(extra.ramGb)]);
+  if (extra?.cpuCores)
+    env.push(["APIS_PROVIDER_CPU_CORES", String(extra.cpuCores)]);
+  if (extra?.secondsPerImage)
+    env.push([
+      "APIS_BENCHMARK_SECONDS_PER_IMAGE",
+      extra.secondsPerImage.toFixed(3),
+    ]);
+  if (extra?.suggestedPriceUsdcBase)
+    env.push(["APIS_SUGGESTED_PRICE_USDC_BASE", extra.suggestedPriceUsdcBase]);
+
   return env;
 }
