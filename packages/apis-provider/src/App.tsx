@@ -39,6 +39,7 @@ import {
   queryProvider,
   type ProviderQueryResult,
 } from "./lib/provider-status";
+import { setTrayState } from "./lib/tray";
 
 type DerivedProvider = { authority: string; pda: string };
 
@@ -207,13 +208,18 @@ function App() {
     }
   }, [logs]);
 
-  // Reconcile UI state with actual worker state every 5 s.
+  // Reconcile UI state with actual worker state every 5 s. Also
+  // mirrors the live status to the menu-bar tray so a glance is
+  // enough to know whether jobs are still being served — even when
+  // the window is hidden.
   useEffect(() => {
     let cancelled = false;
     const probe = async () => {
       try {
         const alive = await invoke<boolean>("worker_status");
-        if (!cancelled) setOnline(alive);
+        if (cancelled) return;
+        setOnline(alive);
+        void setTrayState(alive ? "active" : "paused");
       } catch {
         /* swallow */
       }
@@ -234,6 +240,7 @@ function App() {
       if (online) {
         await invoke("stop_worker");
         setOnline(false);
+        void setTrayState("paused");
       } else {
         await invoke("start_worker", {
           config: {
@@ -243,6 +250,7 @@ function App() {
           },
         });
         setOnline(true);
+        void setTrayState("active");
         setLogs((prev) => [
           ...prev,
           {
@@ -255,6 +263,7 @@ function App() {
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setOnline(false);
+      void setTrayState("error");
     } finally {
       setBusy(false);
     }
