@@ -25,6 +25,7 @@ import { PROVIDER_DISCRIMINATOR } from "@/app/lib/generated/apis-program/src/gen
 import { JOB_DISCRIMINATOR } from "@/app/lib/generated/apis-program/src/generated/accounts/job";
 import { explorerAccountUrl } from "@/app/lib/apis";
 import { WORKER_PROVIDER_PDA } from "@/app/lib/constants";
+import { fetchHeartbeat, type HeartbeatStatus } from "@/app/lib/heartbeat-client";
 import { AnomalousMatterHero } from "@/app/components/ui/anomalous-matter-hero";
 import { ApisLogo } from "@/app/components/ui/apis-logo";
 import { Globe } from "@/app/components/ui/cobe-globe";
@@ -33,7 +34,10 @@ import { MarketplaceFlow } from "@/app/components/marketplace-flow";
 type LiveStats = {
   providerCount: number;
   openJobCount: number;
-  workerOnline: boolean;
+  /** True iff the reference worker's Provider PDA is registered on-chain.
+   *  Note: registration is permanent; this does NOT mean the worker
+   *  process is running right now. For that, see `workerLiveness`. */
+  workerRegistered: boolean;
   fetchedAt: number;
 };
 
@@ -63,6 +67,26 @@ const PROVIDER_MARKERS = [
 export default function Home() {
   const client = useSolanaClient();
   const [stats, setStats] = useState<StatsState>({ kind: "loading" });
+  // Liveness for the reference worker. Polled every POLL_MS independently
+  // of the on-chain stats so a missed network round doesn't tank the
+  // whole indicator. "online" ↔ heartbeat within the last 90s.
+  const [workerLiveness, setWorkerLiveness] = useState<HeartbeatStatus>({
+    kind: "loading",
+  });
+
+  useEffect(() => {
+    let cancelled = false;
+    const probe = async () => {
+      const hb = await fetchHeartbeat(WORKER_PROVIDER_PDA);
+      if (!cancelled) setWorkerLiveness(hb);
+    };
+    void probe();
+    const id = setInterval(() => void probe(), POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -106,13 +130,15 @@ export default function Home() {
             .send(),
         ]);
         if (cancelled) return;
-        const workerOnline = providers.some((p) => p.pubkey === WORKER_PROVIDER_PDA);
+        const workerRegistered = providers.some(
+          (p) => p.pubkey === WORKER_PROVIDER_PDA,
+        );
         setStats({
           kind: "ok",
           stats: {
             providerCount: providers.length,
             openJobCount: jobs.length,
-            workerOnline,
+            workerRegistered,
             fetchedAt: Date.now(),
           },
         });
@@ -183,9 +209,9 @@ export default function Home() {
 
         <WhyApis />
 
-        <NetworkGlobeSection stats={stats} />
+        <NetworkGlobeSection stats={stats} workerLiveness={workerLiveness} />
 
-        <NetworkPanel stats={stats} />
+        <NetworkPanel stats={stats} workerLiveness={workerLiveness} />
 
         <Footer />
       </div>
@@ -258,7 +284,20 @@ function NavWalletButton() {
 
 // ─── Network globe ─────────────────────────────────────────────────────
 
-function NetworkGlobeSection({ stats }: { stats: StatsState }) {
+function workerLivenessLabel(h: HeartbeatStatus): string {
+  if (h.kind === "online") return "live";
+  if (h.kind === "offline") return "offline";
+  if (h.kind === "error") return "—";
+  return "…";
+}
+
+function NetworkGlobeSection({
+  stats,
+  workerLiveness,
+}: {
+  stats: StatsState;
+  workerLiveness: HeartbeatStatus;
+}) {
   return (
     <section className="border-t border-white/10 py-24">
       <div className="grid grid-cols-1 items-center gap-12 lg:grid-cols-[1fr_1fr]">
@@ -288,8 +327,8 @@ function NetworkGlobeSection({ stats }: { stats: StatsState }) {
             />
             <Stat
               label="Reference worker"
-              value={stats.kind === "ok" && stats.stats.workerOnline ? "online" : "—"}
-              highlight={stats.kind === "ok" && stats.stats.workerOnline}
+              value={workerLivenessLabel(workerLiveness)}
+              highlight={workerLiveness.kind === "online"}
             />
           </div>
           <Link
@@ -337,7 +376,13 @@ function Stat({
 
 // ─── Program metadata panel ────────────────────────────────────────────
 
-function NetworkPanel({ stats }: { stats: StatsState }) {
+function NetworkPanel({
+  stats,
+  workerLiveness,
+}: {
+  stats: StatsState;
+  workerLiveness: HeartbeatStatus;
+}) {
   return (
     <section className="border-t border-white/10 py-24">
       <div className="grid grid-cols-1 gap-10 md:grid-cols-2">
@@ -372,11 +417,13 @@ function NetworkPanel({ stats }: { stats: StatsState }) {
           <PanelRow
             label="Reference worker"
             value={
-              stats.kind === "ok"
-                ? stats.stats.workerOnline
-                  ? "M3 Pro · MLX (online)"
-                  : "M3 Pro · MLX (offline)"
-                : "…"
+              workerLiveness.kind === "online"
+                ? "M3 Pro · MLX · live"
+                : workerLiveness.kind === "offline"
+                  ? "M3 Pro · MLX · offline"
+                  : workerLiveness.kind === "error"
+                    ? "M3 Pro · MLX · liveness probe failed"
+                    : "M3 Pro · MLX · checking…"
             }
             link={explorerAccountUrl(WORKER_PROVIDER_PDA)}
           />
