@@ -40,6 +40,18 @@ export const DEFAULT_SETTINGS: Settings = {
   workingDir: "",
 };
 
+const ONBOARDED_KEY = "hasOnboarded";
+
+export async function hasOnboarded(): Promise<boolean> {
+  const v = await store.get<boolean>(ONBOARDED_KEY);
+  return v === true;
+}
+
+export async function markOnboarded(): Promise<void> {
+  await store.set(ONBOARDED_KEY, true);
+  await store.save();
+}
+
 const store = new LazyStore(STORE_FILE);
 
 export async function loadSettings(): Promise<Settings> {
