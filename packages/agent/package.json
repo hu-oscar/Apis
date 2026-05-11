@@ -1,0 +1,25 @@
+{
+  "name": "@apis/agent",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Apis autonomous agent buyer — Claude reads, picks, pays, settles.",
+  "scripts": {
+    "buy": "tsx src/index.ts",
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "echo \"agent: no tests yet\" && exit 0"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.95.1",
+    "@solana/kit": "^6.9.0",
+    "@solana/program-client-core": "^6.9.0",
+    "@solana-program/token": "^0.13.0",
+    "bs58": "^6.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "tsx": "^4.20.0",
+    "typescript": "~5.8.3"
+  }
+}
