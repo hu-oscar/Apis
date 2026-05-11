@@ -31,6 +31,7 @@ import { JobStatus } from "@/app/lib/generated/apis-program/src/generated/types/
 import { explorerAccountUrl } from "@/app/lib/apis";
 import { WORKER_PROVIDER_PDA, formatUsdc } from "@/app/lib/constants";
 import { NavBar } from "@/app/components/ui/navbar";
+import { LoadingPanel } from "@/app/components/ui/loading-panel";
 import {
   fetchHeartbeat,
   type HeartbeatRecord,
@@ -225,37 +226,52 @@ export default function NetworkPage() {
           </p>
         </header>
 
-        <section className="space-y-4 pb-12">
-          <SectionHeader
-            label="Providers"
-            count={state.kind === "ok" ? state.providers.length : null}
-            sublabel="Registered worker keys with bond escrow"
-          />
-          {state.kind === "loading" && <LoadingRows n={1} />}
-          {state.kind === "error" && (
-            <ErrorRow message={state.message} />
-          )}
-          {state.kind === "ok" && state.providers.length === 0 && (
-            <EmptyRow message="No providers registered yet." />
-          )}
-          {state.kind === "ok" &&
-            state.providers.map((p) => <ProviderCard key={p.pda} provider={p} />)}
-        </section>
+        {state.kind === "loading" && (
+          <div className="pb-12">
+            <LoadingPanel
+              label="fetching providers + heartbeats"
+              hint="first load can take ~5s — each provider's heartbeat fetches from Pinata KV"
+            />
+          </div>
+        )}
 
-        <section className="space-y-4 pb-12">
-          <SectionHeader
-            label="Open jobs"
-            count={state.kind === "ok" ? state.jobs.length : null}
-            sublabel="Jobs in flight (post-create_job, pre-confirm_completion)"
-          />
-          {state.kind === "loading" && <LoadingRows n={1} />}
-          {state.kind === "error" && <ErrorRow message={state.message} />}
-          {state.kind === "ok" && state.jobs.length === 0 && (
-            <EmptyRow message="No open jobs right now — all settled or cancelled." />
-          )}
-          {state.kind === "ok" &&
-            state.jobs.map((j) => <JobCard key={j.pda} job={j} />)}
-        </section>
+        {state.kind === "error" && (
+          <div className="pb-12">
+            <ErrorRow message={state.message} />
+          </div>
+        )}
+
+        {state.kind === "ok" && (
+          <>
+            <section className="space-y-4 pb-12">
+              <SectionHeader
+                label="Providers"
+                count={state.providers.length}
+                sublabel="Registered worker keys with bond escrow"
+              />
+              {state.providers.length === 0 ? (
+                <EmptyRow message="No providers registered yet." />
+              ) : (
+                state.providers.map((p) => (
+                  <ProviderCard key={p.pda} provider={p} />
+                ))
+              )}
+            </section>
+
+            <section className="space-y-4 pb-12">
+              <SectionHeader
+                label="Open jobs"
+                count={state.jobs.length}
+                sublabel="Jobs in flight (post-create_job, pre-confirm_completion)"
+              />
+              {state.jobs.length === 0 ? (
+                <EmptyRow message="No open jobs right now — all settled or cancelled." />
+              ) : (
+                state.jobs.map((j) => <JobCard key={j.pda} job={j} />)
+              )}
+            </section>
+          </>
+        )}
 
         <FooterStrip
           fetchedAt={state.kind === "ok" ? state.fetchedAt : null}
