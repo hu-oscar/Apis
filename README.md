@@ -32,6 +32,8 @@ Four surfaces, one program:
 | | |
 |---|---|
 | **Live web app** | <https://apis-web-five.vercel.app> |
+| **MCP server** | local-only at v0.4.0 — `http://localhost:3030/mcp` after `pnpm --filter @apis/mcp dev`. Fly.io deploy queued for v0.4.1. |
+| **Atlas-7 agent CLI** | `pnpm --filter agent buy "..." --mcp http://localhost:3030/mcp` |
 | **Demo video (≤ 3 min)** | https://drive.google.com/file/d/1Ve944QlXY6CNj4oRqKGkLRuobA8KF9Gi/view?usp=sharing |
 | **GitHub** | <https://github.com/hu-oscar/Apis> |
 | | |
@@ -63,7 +65,9 @@ Solana Explorer shows all four lifecycle transactions —
 
 ## Try it in 2 minutes (for judges)
 
-No setup, no install, just a wallet.
+Two demos, depending on what you want to evaluate.
+
+### **A. Buyer flow** (human-driven, no setup)
 
 1. Switch **Phantom** to devnet (Settings → Developer Settings → Testnet Mode
    ON → network: Devnet). Or any Solana wallet that supports devnet.
@@ -85,6 +89,34 @@ While you're there: peek at **/stats** for live network telemetry,
 sessions via per-wallet localStorage), and **/provider/[pda]** for a
 provider's profile with chip / RAM / Flux speed / suggested price.
 
+### **B. Autonomous agent flow** (Atlas-7 = Claude buying compute on its own)
+
+Local-only at v0.4.0 — MCP server hosting on Fly.io is the v0.4.1
+deliverable. Until then, three terminals:
+
+```bash
+# Terminal 1 — MCP server (binds to localhost:3030)
+APIS_MCP_SERVER_KEYPAIR_JSON="$(cat ~/.config/solana/id.json)" \
+  pnpm --filter @apis/mcp dev
+
+# Terminal 2 — provider desktop app (Tauri window opens)
+pnpm --filter apis-provider tauri dev
+
+# Terminal 3 — Atlas-7 runs the autonomous purchase
+export ANTHROPIC_API_KEY=sk-ant-…
+export APIS_MCP_URL=http://localhost:3030/mcp
+pnpm --filter agent buy "a cyberpunk cat hacker, neon rain" --budget 0.10
+```
+
+Claude reads `list_providers` over MCP, picks one, refines the prompt,
+asks for a `quote_inference` (which returns an x402 payment block),
+signs + sends a single SPL USDC transfer with the quote's memo, then
+calls `submit_job` with the payment signature. The MCP server verifies
+the on-chain payment, signs `create_job` on Claude's behalf, polls,
+auto-signs `confirm_completion` when the result lands. Total ~60s end
+to end, ~1 USDC paid, one Solana tx ever signed by Claude (the
+payment).
+
 ---
 
 ## What ships in this submission
@@ -94,17 +126,27 @@ provider's profile with chip / RAM / Flux speed / suggested price.
 | **F1** — Provider desktop app (Tauri) | ✅ | macOS-only. System tray, signed heartbeats, real earnings dashboard, GPU contention auto-pause, hardware detection + Flux benchmark, suggested $/job price. |
 | **F2** — Buyer web app (Next.js) | ✅ | 7 routes (landing, /network, /provider/[pda], /submit, /job/[id], /stats, /history), live on-chain reads, Phantom-signed buyer flow, cancel & refund, branded 404/error/loading chrome, mobile-responsive. |
 | **F3** — On-chain escrow program (Anchor) | ✅ | 7 instructions, full lifecycle, 20 bankrun tests (≥1 happy + ≥1 malicious-input per instruction). Deployed to devnet at `2qe8YXc…SiH868mhf`. |
-| **F4** — MCP + x402 agent rails | ❌ | **Permanently dropped** — scope cut to focus on a complete buyer + provider experience. |
+| **F4** — MCP + x402 agent rails | ✅ | Real MCP server with 4 tools (`list_providers`, `quote_inference`, `submit_job`, `get_status`) over Streamable HTTP. x402-flavored paywall on `submit_job` — agent pays USDC via SPL transfer + memo, server verifies on chain then signs `create_job` on the agent's behalf. Atlas-7 CLI = Claude Sonnet 4.5 driving the whole loop autonomously. Local-only at v0.4.0; Fly.io deploy queued for v0.4.1. |
 | **F5** — Multi-GPU pooling | ❌ | **Permanently dropped** — single-GPU per provider, with `capacity` in heartbeat reserved for future bumping. |
 
-**Signed liveness wire** ties the two surfaces together: the worker
-Ed25519-signs every heartbeat with its on-chain `Provider.authority`
-key, Vercel verifies the signature + matches it to chain, then writes
-the enriched payload to KV. Buyer pages read it back — so the chip
-and benchmark you see on `/network` are cryptographically attested by
-the provider's actual keypair, not a self-reported label. (See
-`packages/worker/apis_worker/heartbeat.py` and
-`packages/web/app/api/heartbeat/[pda]/route.ts`.)
+**Two cryptographic primitives tie the four surfaces together:**
+
+- **Signed liveness heartbeats** — worker Ed25519-signs every
+  heartbeat with its on-chain `Provider.authority` key, Vercel
+  verifies the signature + matches it to chain before persisting the
+  enriched payload to KV. Buyer pages read it back — so the chip and
+  benchmark you see on `/network` are cryptographically attested by
+  the provider's actual keypair, not a self-reported label. See
+  `packages/worker/apis_worker/heartbeat.py` and
+  `packages/web/app/api/heartbeat/[pda]/route.ts`.
+- **x402-style payment receipts** — Atlas-7 pays the MCP server via a
+  single SPL USDC transfer carrying the server-issued `payment_id` as
+  its memo. The server walks the on-chain tx (`getTransaction` with
+  `jsonParsed` encoding), verifies amount + recipient + memo + replay
+  window before executing `create_job` on the agent's behalf. The
+  agent never signs an apis_program instruction; the MCP server is
+  the only on-chain actor. See `packages/mcp/src/lib/payment.ts` and
+  `packages/agent/src/lib/payment-tx.ts`.
 
 ---
 
@@ -130,26 +172,35 @@ The hackathon MVP runs on Solana devnet and uses **Flux Schnell** (Apache
 
 ## Architecture
 
-Three coupled components, three external services. The Anchor
+Four coupled clients, one Anchor program, three external services. The
 program is the only piece that has to be trusted; everything else is
-swappable.
+swappable. Buyers come in two flavors: humans through the web app, or
+AI agents through the MCP server.
 
 ```mermaid
 flowchart LR
   classDef browser fill:#11091e,stroke:#9945FF,color:#fff,stroke-width:2px
+  classDef agent   fill:#11091e,stroke:#9945FF,color:#fff,stroke-width:2px
   classDef vercel  fill:#06140d,stroke:#14F195,color:#fff,stroke-width:2px
   classDef solana  fill:#11091e,stroke:#9945FF,color:#fff,stroke-width:2px
   classDef worker  fill:#06140d,stroke:#14F195,color:#fff,stroke-width:2px
+  classDef mcp     fill:#06140d,stroke:#14F195,color:#fff,stroke-width:2px
   classDef ipfs    fill:#100618,stroke:#7c3aed,color:#fff,stroke-width:2px
 
-  Browser["Buyer browser<br/>Next.js 16 + Phantom<br/>(@solana/kit, Codama)"]:::browser
+  Browser["Human buyer<br/>Next.js 16 + Phantom<br/>(@solana/kit, Codama)"]:::browser
+  Agent["AI agent (Atlas-7)<br/>Claude Sonnet 4.5<br/>+ MCP client + @solana/kit"]:::agent
   Vercel["apis-web-five.vercel.app<br/>Pages + API routes<br/>(Pinata-as-KV)"]:::vercel
+  Mcp["apis-mcp server<br/>4 tools over Streamable HTTP<br/>+ x402 paywall + hot wallet"]:::mcp
   Pinata["Pinata IPFS<br/>specs JSON + result PNGs"]:::ipfs
   Program["apis_program<br/>Anchor 1.0 · Solana devnet<br/>2qe8YXc…SiH868mhf"]:::solana
   Worker["Provider<br/>Python apis_worker<br/>MLX · Flux Schnell"]:::worker
 
   Browser <-->|HTTP| Vercel
   Browser ==>|sign + send tx<br/>create_job / confirm_completion| Program
+  Agent <-->|MCP tools<br/>list / quote / submit / status| Mcp
+  Agent ==>|sign + send tx<br/>1× SPL USDC transfer with x402 memo| Program
+  Mcp ==>|sign + send tx<br/>create_job / confirm_completion<br/>on agent's behalf| Program
+  Mcp <-->|getProgramAccounts<br/>verifyPayment / postSpec| Vercel
   Vercel  <-->|pin / list / fetch| Pinata
   Vercel  -->|getProgramAccounts<br/>fetchJob| Program
   Worker  -->|POST result CID<br/>GET spec by hash| Vercel
@@ -169,6 +220,14 @@ Anchor `emit!` event the worker subscribes to via `logsSubscribe`.
 - **Worker ↔ program directly**: same for `accept_job` and
   `submit_completion` — signed by the worker's local keypair, the
   Vercel API never relays them.
+- **Agent → MCP → program**: the agent doesn't sign apis_program txs
+  at all. It pays the MCP server via a single SPL transfer with an
+  x402 memo; the server verifies on chain, then signs `create_job` +
+  `confirm_completion` from its own hot wallet. Trade-off: judges
+  can ask "but what if the MCP server is malicious?" — answer is yes,
+  the server can frontrun or grief, which is why the buyer-direct
+  path stays the primary one. Agent-mode is for autonomous use cases
+  where wallet management isn't viable.
 - **Vercel as a side-channel only**: it serves the UI, it brokers
   off-chain JSON (specs, result CIDs) via Pinata, and it runs a small
   USDC faucet for hackathon judges. It has no privileged role.
@@ -254,6 +313,64 @@ on `/job/[id]`'s Funded-state card, with a live deadline countdown
 ("expires in 4m 32s") that turns amber under one minute. The program
 also has `submit_completion` gating: only the registered provider's
 `authority` can post a proof for a job that targets it.
+
+---
+
+## Agent + MCP + x402 lifecycle
+
+Same on-chain flow as above, different actor on the buyer side.
+Atlas-7 (Claude) never signs an apis_program instruction — it pays
+the MCP server via a single SPL transfer + memo, and the server
+signs `create_job` + `confirm_completion` on its behalf.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant Cl as Claude (Sonnet 4.5)
+  participant Ag as agent CLI (@solana/kit)
+  participant MC as apis-mcp server (Hot wallet)
+  participant Pr as apis_program (devnet)
+  participant Wo as Worker (MLX)
+  participant Pi as Pinata IPFS
+
+  Cl->>Ag: "buy compute for: a cyberpunk cat hacker"
+  Ag->>MC: tools/call list_providers
+  MC->>Pr: getProgramAccounts + heartbeat fetch
+  MC-->>Ag: providers[] (chip, RAM, speed, suggested $)
+  Ag->>Cl: catalog + budget + task
+  Cl-->>Ag: { provider_pda, refined_prompt, max_price }
+  Ag->>MC: tools/call quote_inference
+  MC-->>Ag: { payment_id, pay_to_ata, amount, memo }
+  Ag->>Pr: SPL USDC transfer + memo(payment_id)<br/>[the only Solana tx Claude signs]
+  Pr-->>Ag: payment tx signature
+  Ag->>MC: tools/call submit_job({payment_id, payment_signature})
+  MC->>Pr: getTransaction → verify amount + memo + replay window
+  MC->>Pi: POST /api/spec (canonical JSON)
+  MC->>Pr: sign create_job from MCP hot wallet
+  Note over Pr: USDC moves MCP wallet → escrow vault<br/>Job PDA created
+  Pr-->>Wo: JobCreated event (WebSocket)
+  Wo->>Wo: mflux-generate (~50s warm)
+  Wo->>Pi: pin result PNG
+  Wo->>Pr: submit_completion(proof_hash)
+  loop poll
+    Ag->>MC: tools/call get_status
+    MC->>Pr: read Job state + KV result
+  end
+  Note over MC: Completed + result CID present → auto-settle
+  MC->>Pr: sign confirm_completion from MCP hot wallet
+  Note over Pr: vault → provider + treasury<br/>Job + vault closed
+  MC-->>Ag: { result: {cid, ipfs_url}, settlement: {tx} }
+  Ag->>Pi: GET ipfs/{cid} → save PNG locally
+  Ag-->>Cl: image + tx signatures
+```
+
+The x402 paywall is enforced by `submit_job`: without a valid
+`payment_signature` that points at an on-chain SPL transfer
+matching the quote, the server refuses to sign `create_job`. The
+verification logic walks the `jsonParsed` tx → finds the SPL Token
+transfer to the server's USDC ATA → checks amount + memo + the
+±5min replay window. Same security shape as Coinbase x402, but
+self-rolled (no external facilitator dependency).
 
 ---
 
@@ -376,6 +493,42 @@ Cross-platform support is queued for Phase 2 (Tauri builds Win/Linux
 natively; the bottleneck is Flux Schnell's CUDA path for non-Mac
 providers).
 
+### MCP server (TypeScript, Express)
+
+| Library | Use |
+|---|---|
+| `@modelcontextprotocol/sdk` 1.29 | `McpServer`, `StreamableHTTPServerTransport`, tool registration (`server.registerTool`), session lifecycle via `mcp-session-id` headers |
+| `express` 4 | HTTP transport for the MCP endpoint + `/health` + landing page. Cleaner integration with the SDK's `IncomingMessage` / `ServerResponse` API than Hono. |
+| `@solana/kit` 6.x | Server-side keypair signing of `create_job` + `confirm_completion` on the agent's behalf, RPC client, blockhash lifetime, tx serialization |
+| `@solana-program/token` | (transitive) Token Program account ATA derivation |
+| `zod` 3.x | Tool input schema validation — invalid args bounce back as MCP errors before any RPC call |
+
+Server hot wallet lives at `~/.config/apis/mcp-server.json` (file)
+OR in the `APIS_MCP_SERVER_KEYPAIR_JSON` env var (Fly.io-friendly).
+Needs ~0.1 SOL float + ~5 USDC float per active job. The x402
+verifier uses `rpc.getTransaction({encoding: "jsonParsed"})` which
+returns SPL token transfers + memo instructions as structured data
+— no manual borsh decoding of token instructions.
+
+### Atlas-7 agent (TypeScript, Claude Sonnet 4.5)
+
+| Library | Use |
+|---|---|
+| `@anthropic-ai/sdk` 0.95 | Claude as the decision-maker — picks a provider, refines the prompt, sets a budget. Returns structured JSON; the agent validates the chosen `provider_pda` is in the catalog before signing anything. |
+| `@modelcontextprotocol/sdk` 1.29 | MCP client + `StreamableHTTPClientTransport` for the `--mcp` mode. Thin typed wrapper around tool calls. |
+| `@solana/kit` 6.x + `@solana-program/token` | Build + sign the x402 payment tx — one versioned tx with two instructions (SPL `TransferChecked` + a memo program call carrying the server-issued `payment_id`). |
+
+The agent has two operational modes:
+
+- **Direct Solana** (default): Atlas-7's keypair signs `create_job`
+  + `confirm_completion` directly. No MCP, no x402, no server in
+  the loop. Faster, fewer moving parts; useful when there's no MCP
+  server reachable.
+- **MCP + x402** (`--mcp <url>` or `APIS_MCP_URL` env): the agent
+  signs only one Solana tx — the SPL USDC transfer to the MCP
+  server's ATA. The server signs everything on-chain. This is the
+  "agents-as-buyers" demo path.
+
 ### Solana CLI tooling
 
 `solana`, `spl-token`, `anchor`, `@solana-program/program-metadata` (for
@@ -436,24 +589,56 @@ Apis/
 │   │       ├── test_create_job.py           # buyer-side e2e
 │   │       └── test_confirm_job.py          # buyer-side settlement
 │   │
-│   └── apis-provider/       # Tauri 2 desktop app (macOS, F1)
-│       ├── src-tauri/
-│       │   ├── src/
-│       │   │   ├── lib.rs                   # Builder, setup, command registry
-│       │   │   ├── worker.rs                # subprocess lifecycle + log stream
-│       │   │   ├── tray.rs                  # menu-bar tray + 4 state icons
-│       │   │   ├── gpu_monitor.rs           # ioreg-based GPU % sampler
-│       │   │   ├── hw_detect.rs             # sysctl chip / RAM / cores
-│       │   │   └── benchmark.rs             # spawns apis_worker.benchmark
-│       │   ├── icons/tray/                  # active/paused/error/inactive PNGs
-│       │   └── Cargo.toml                   # tauri features: tray-icon, image-png
-│       └── src/                              # React dashboard
-│           ├── App.tsx                       # main shell
-│           ├── lib/settings.ts               # Tauri Store settings + autoPause
-│           ├── lib/job-history.ts            # persistent earnings ledger
-│           ├── lib/gpu-monitor.ts            # rolling-avg hook
-│           ├── lib/benchmark.ts              # detectHardware + runBenchmark
-│           └── components/Onboarding.tsx     # first-launch 3-step wizard
+│   ├── apis-provider/       # Tauri 2 desktop app (macOS, F1)
+│   │   ├── src-tauri/
+│   │   │   ├── src/
+│   │   │   │   ├── lib.rs                   # Builder, setup, command registry
+│   │   │   │   ├── worker.rs                # subprocess lifecycle + log stream
+│   │   │   │   ├── tray.rs                  # menu-bar tray + 4 state icons
+│   │   │   │   ├── gpu_monitor.rs           # ioreg-based GPU % sampler
+│   │   │   │   ├── hw_detect.rs             # sysctl chip / RAM / cores
+│   │   │   │   └── benchmark.rs             # spawns apis_worker.benchmark
+│   │   │   ├── icons/tray/                  # active/paused/error/inactive PNGs
+│   │   │   └── Cargo.toml                   # tauri features: tray-icon, image-png
+│   │   └── src/                              # React dashboard
+│   │       ├── App.tsx                       # main shell
+│   │       ├── lib/settings.ts               # Tauri Store settings + autoPause
+│   │       ├── lib/job-history.ts            # persistent earnings ledger
+│   │       ├── lib/gpu-monitor.ts            # rolling-avg hook
+│   │       ├── lib/benchmark.ts              # detectHardware + runBenchmark
+│   │       └── components/Onboarding.tsx     # first-launch 3-step wizard
+│   │
+│   ├── mcp/                 # MCP server (F4 agent rail)
+│   │   ├── src/
+│   │   │   ├── index.ts                     # Express + StreamableHTTPServerTransport
+│   │   │   ├── server.ts                    # McpServer + 4 tool registrations
+│   │   │   ├── generated/apis-program/      # Codama-generated client (copied)
+│   │   │   └── lib/
+│   │   │       ├── rpc.ts                   # constants + RPC + USDC formatter
+│   │   │       ├── network.ts               # fetchProviders + heartbeats
+│   │   │       ├── spec.ts                  # canonical-JSON hash + POST
+│   │   │       ├── server-wallet.ts         # MCP hot wallet loader
+│   │   │       ├── onchain.ts               # create_job + confirm_completion
+│   │   │       └── payment.ts               # x402 self-roll verifier
+│   │   └── README.md                        # tool surface + curl tests
+│   │
+│   └── agent/               # Atlas-7 autonomous Claude buyer (F4 demo)
+│       ├── src/
+│       │   ├── index.ts                     # CLI: direct-Solana or --mcp mode
+│       │   ├── generated/apis-program/      # Codama-generated client (copied)
+│       │   └── lib/
+│       │       ├── wallet.ts                # ~/.config/apis/agent.json
+│       │       ├── network.ts               # fetch + pickProvider
+│       │       ├── decide.ts                # decideWithClaude / Deterministic
+│       │       ├── spec.ts                  # canonical-JSON + sha256
+│       │       ├── submit.ts                # create_job (direct mode)
+│       │       ├── watch.ts                 # poll /api/jobs (direct mode)
+│       │       ├── confirm.ts               # confirm_completion (direct mode)
+│       │       ├── mcp-client.ts            # @mcp/sdk client + typed tool helpers
+│       │       ├── payment-tx.ts            # SPL transfer + memo for x402
+│       │       ├── download.ts              # IPFS PNG → ./out/
+│       │       └── format.ts                # ANSI step()/indent()/rule()
+│       └── README.md
 │
 ├── docs/                    # research, PRD, tech design (v1)
 ├── AGENTS.md                # engineering rules + agent posture
@@ -586,6 +771,82 @@ pnpm --filter apis-provider tauri build
 See `packages/apis-provider/BUILD.md` for Gatekeeper workarounds when
 distributing the unsigned bundle.
 
+### 7. Run the MCP server (F4 agent rail)
+
+The MCP server exposes the marketplace as four tools (`list_providers`,
+`quote_inference`, `submit_job`, `get_status`) over Streamable HTTP.
+Agents call these instead of touching the Solana program directly.
+`submit_job` is x402-paywalled — agents must pay the server in USDC
+(via a single SPL transfer with a server-issued memo) before it will
+sign `create_job` on their behalf.
+
+The server needs its own hot wallet, funded with:
+- ~0.1 SOL for tx fees (devnet airdrop is fine)
+- ≥ 5 USDC float for in-flight job escrow
+
+```bash
+# Option A — keypair file
+solana-keygen new --outfile ~/.config/apis/mcp-server.json
+SERVER_PUBKEY=$(solana address --keypair ~/.config/apis/mcp-server.json)
+solana transfer "$SERVER_PUBKEY" 0.1 --url devnet --allow-unfunded-recipient
+cd packages/worker && .venv/bin/python scripts/bootstrap_devnet.py \
+  --fund "$SERVER_PUBKEY" --amount 10
+
+pnpm --filter @apis/mcp dev
+# → listening on http://0.0.0.0:3030
+
+# Option B — env-var keypair (Fly.io-friendly; keep the file off disk)
+export APIS_MCP_SERVER_KEYPAIR_JSON="$(cat ~/.config/apis/mcp-server.json)"
+pnpm --filter @apis/mcp dev
+```
+
+Sanity-check the server with curl or the MCP Inspector:
+
+```bash
+# Direct curl
+curl -s http://localhost:3030/health
+npx @modelcontextprotocol/inspector http://localhost:3030/mcp
+```
+
+See `packages/mcp/README.md` for the full tool surface + a curl-only
+smoke test that exercises initialize → tools/list → list_providers.
+
+### 8. Run Atlas-7 (the autonomous Claude buyer)
+
+The agent CLI lives in `packages/agent/`. Two modes:
+
+```bash
+# One-time: generate the agent's keypair + fund it
+pnpm --filter agent buy --bootstrap-wallet
+# → prints "pubkey: <ADDRESS>"
+solana transfer <ADDRESS> 0.05 --url devnet --allow-unfunded-recipient
+cd packages/worker && .venv/bin/python scripts/bootstrap_devnet.py \
+  --fund <ADDRESS> --amount 10
+```
+
+Then:
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-…
+
+# Mode 1 — direct Solana (no MCP)
+pnpm --filter agent buy "a cyberpunk cat hacker, neon rain"
+# → agent signs create_job + confirm_completion itself
+
+# Mode 2 — MCP + x402 (the full autonomous agent demo)
+export APIS_MCP_URL=http://localhost:3030/mcp
+pnpm --filter agent buy "a cyberpunk cat hacker, neon rain" --budget 0.10
+# → agent signs ONE Solana tx (the USDC payment with x402 memo);
+#   MCP server signs create_job + confirm_completion on its behalf
+```
+
+Useful flags: `--budget 0.10` (USDC cap), `--skip-claude` (use a
+deterministic provider pick + raw prompt — no Anthropic API needed),
+`--model claude-opus-4-5` (for demo recordings), `--dry-run` (plan
+but don't submit).
+
+See `packages/agent/README.md` for the agent's internals.
+
 ---
 
 ## Scope: what's in, what's out
@@ -610,38 +871,52 @@ Honest accounting for the hackathon submission.
   per instruction).
 - 7-route web app with Phantom integration + test USDC faucet.
 - Tauri desktop app (macOS) for providers.
+- **MCP server + x402 paywall** with 4 tools over Streamable HTTP.
+  Agent pays via SPL transfer + memo, server self-verifies on chain
+  (no external facilitator dependency), then signs `create_job` +
+  `confirm_completion` on the agent's behalf.
+- **Atlas-7 autonomous agent CLI** (Claude Sonnet 4.5) that runs the
+  full purchase loop end-to-end. Two modes — direct Solana (default)
+  or `--mcp` (the F4 demo path).
 
 **Out (and why).**
 
-- **MCP server + x402 paywall (F4)** — dropped. The original plan was an
-  agent-facing API surface so Claude / ElizaOS could autonomously buy
-  inferences. Re-scoped to "complete the buyer + provider experience"
-  during Sprint 3; the agent layer is a Phase 2 feature that doesn't
-  block the core marketplace narrative.
+- **Fly.io deploy of the MCP server** — server is local-only at
+  v0.4.0. The hot wallet env-var path is already in place
+  (`APIS_MCP_SERVER_KEYPAIR_JSON`), so `fly launch + fly secrets set`
+  finishes the deploy. Queued for v0.4.1.
+- **Coinbase x402 facilitator** — the server self-verifies SPL
+  transfers on chain directly (same security shape, no external dep).
+  Coinbase facilitator integration adds standards compliance + cross-
+  service interop; Phase 2 polish.
 - **Multi-GPU pooling (F5)** — dropped permanently. One worker process
   per Mac, with `capacity` reserved in the signed heartbeat for future
   multi-GPU bumping.
 - **TEE / zkML verification** — out of scope per Research §4 (infeasible
   on consumer GPUs in 2026). The MVP relies on layer-1 verification
   (signatures + on-chain proof hash); spot-check + slashing logic is
-  the Sprint 4 deliverable, not in this submission.
+  the Sprint 5 deliverable, not in this submission.
 - **Mainnet** — devnet only. Test mint, no real-money exposure. Mainnet
   is gated on a security audit (Phase 2).
 - **Auto-update / Stronghold-encrypted keypair / native notifications**
-  — desktop app polish queued for after Sprint 4 escrow polish.
+  — desktop app polish queued for after Sprint 5 verification work.
 - **Code signing on the desktop bundle** — unsigned `.dmg` requires
   Gatekeeper workaround (`xattr -d com.apple.quarantine …`). Real
   signing needs an Apple Developer Program account, Phase 2.
+- **Server-side state persistence** — the MCP server keeps pending
+  quotes + pending jobs in an in-memory `Map`. A restart loses the
+  quote-store + pending-confirm queue. Production needs Redis or
+  similar. Acceptable for a single-instance hackathon deploy.
 
 **Known cosmetic bugs.**
 
 - Active/Total job counters on the desktop app's Provider PDA card
   show u64 noise — off-by-N byte offset in the W2 Provider account
-  decoder, doesn't affect the on-chain flow. Fix queued for Sprint 4.
+  decoder, doesn't affect the on-chain flow. Fix queued for Sprint 5.
 - Heartbeat lookup latency is ~700ms–1s per PDA (Pinata roundtrip),
   so `/network` and `/stats` initial load takes ~5s. Mitigated with
   HexSwarm loading states. Real fix is a batched
-  `/api/heartbeats?pdas=…` endpoint — Sprint 4 polish.
+  `/api/heartbeats?pdas=…` endpoint — queued.
 
 ---
 
