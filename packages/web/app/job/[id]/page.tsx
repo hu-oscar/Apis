@@ -32,8 +32,6 @@ import {
   PINATA_GATEWAY,
   TREASURY,
   USDC_MINT,
-  WORKER_PROVIDER_AUTHORITY,
-  WORKER_PROVIDER_PDA,
   formatUsdc,
 } from "@/app/lib/constants";
 
@@ -43,6 +41,10 @@ type ApiResp = {
     id: string;
     buyer: Address;
     provider: Address;
+    /** Provider.authority — needed as the SPL ATA owner for the payout
+     *  during confirm_completion. Server resolves this from the
+     *  on-chain Provider account so the page doesn't need to. */
+    providerAuthority: Address | null;
     priceLamportsUsdc: string;
     specHashHex: string;
     status: number;
@@ -134,6 +136,12 @@ export default function JobPage() {
 
   const handleConfirm = async () => {
     if (!buyerSigner || !data?.onChain) return;
+    if (!data.onChain.providerAuthority) {
+      setOpError(
+        "Provider account couldn't be resolved on-chain. Refresh and try again.",
+      );
+      return;
+    }
     setBusy("Confirming…");
     setOpError(null);
     sendTx.reset();
@@ -141,8 +149,11 @@ export default function JobPage() {
       const ix = await getConfirmCompletionInstructionAsync({
         buyer: buyerSigner,
         job: jobPda,
-        provider: WORKER_PROVIDER_PDA,
-        providerAuthority: WORKER_PROVIDER_AUTHORITY,
+        // Dynamic — read from the on-chain Job (and its Provider) so
+        // confirm_completion works for any provider, not just the
+        // hardcoded reference worker.
+        provider: data.onChain.provider,
+        providerAuthority: data.onChain.providerAuthority,
         treasury: TREASURY,
         usdcMint: USDC_MINT,
       });

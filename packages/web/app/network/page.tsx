@@ -282,6 +282,18 @@ function ProviderCard({ provider }: { provider: ProviderRow }) {
           <span className="font-mono text-white/85">{provider.totalJobs}</span>
         </Cell>
       </div>
+      <div className="flex justify-end pt-1">
+        <Link
+          href={`/submit?provider=${provider.pda}`}
+          className={
+            isActive
+              ? "inline-flex items-center gap-1.5 rounded-md bg-[#14F195]/15 px-3 py-1.5 font-mono text-[10px] uppercase tracking-wider text-[#14F195] transition hover:bg-[#14F195]/25"
+              : "inline-flex items-center gap-1.5 rounded-md border border-white/15 bg-white/[0.03] px-3 py-1.5 font-mono text-[10px] uppercase tracking-wider text-white/55 transition hover:border-white/30 hover:text-white/85"
+          }
+        >
+          Use this provider →
+        </Link>
+      </div>
     </motion.div>
   );
 }

@@ -11,7 +11,11 @@ import {
   createSolanaRpc,
   type Address,
 } from "@solana/kit";
-import { fetchMaybeJob, JobStatus } from "@/app/lib/apis-program";
+import {
+  fetchMaybeJob,
+  fetchMaybeProvider,
+  JobStatus,
+} from "@/app/lib/apis-program";
 import { kvGet } from "@/app/lib/kv";
 
 const RPC_URL =
@@ -55,6 +59,14 @@ export async function GET(
   }
 
   const j = maybeJob.data;
+  // Resolve provider.authority — confirm_completion needs it as the SPL
+  // ATA owner for the payout. Doing it server-side means the page can
+  // call confirm_completion without a second RPC round-trip.
+  const maybeProvider = await fetchMaybeProvider(rpc, j.provider);
+  const providerAuthority: Address | null = maybeProvider.exists
+    ? maybeProvider.data.authority
+    : null;
+
   const result = await kvGet<ResultRecord>("result", pda);
 
   return NextResponse.json({
@@ -63,6 +75,7 @@ export async function GET(
       id: j.id.toString(),
       buyer: j.buyer,
       provider: j.provider,
+      providerAuthority,
       priceLamportsUsdc: j.priceLamportsUsdc.toString(),
       specHashHex: Array.from(j.specHash, (n) => n.toString(16).padStart(2, "0")).join(""),
       status: j.status,

@@ -1,24 +1,26 @@
 "use client";
 
-// Apis W2 buyer submit page.
+// Apis buyer submit page.
 //
 // Flow:
-//   1. Read wallet from useWalletConnection (already wired in app/components/providers).
-//   2. Derive the buyer's USDC ATA against the test mint and read the
+//   1. Read wallet from useWalletConnection.
+//   2. Read selected provider from `?provider=<pda>` URL param (set by
+//      a click on /network or /provider/[pda]). Fetch the Provider PDA
+//      on-chain to confirm it exists.
+//   3. Derive the buyer's USDC ATA against the test mint and read the
 //      balance — gate "Submit" on having ≥ price USDC.
-//   3. POST the spec to /api/spec so the worker can read the prompt
-//      from /tmp/apis_specs/{spec_hash}.json once JobCreated fires.
-//   4. Build + sign create_job; redirect to /job/[jobPda].
+//   4. POST the spec to /api/spec so the worker can read the prompt
+//      once JobCreated fires.
+//   5. Build + sign create_job targeting the selected provider; redirect
+//      to /job/[jobPda].
 //
-// The worker (running locally, registered as WORKER_PROVIDER_PDA) picks
-// up JobCreated events filtered to itself, accepts the job, runs Flux
-// Schnell, uploads to IPFS, and submits completion. The /job/[id] page
-// polls the on-chain Job + the worker's result side-channel until the
-// image is ready.
+// The matched worker picks up JobCreated events filtered to its own
+// Provider PDA, accepts the job, runs the workload, uploads to IPFS,
+// and submits completion. The /job/[id] page polls until done.
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   useSendTransaction,
@@ -27,9 +29,15 @@ import {
   useWalletSession,
 } from "@solana/react-hooks";
 import { createWalletTransactionSigner } from "@solana/client";
+import { ArrowRight } from "lucide-react";
 import type { Address, TransactionSigner } from "@solana/kit";
 
-import { findJobPda, getCreateJobInstructionAsync } from "@/app/lib/apis-program";
+import {
+  fetchMaybeProvider,
+  findJobPda,
+  getCreateJobInstructionAsync,
+} from "@/app/lib/apis-program";
+import { ProviderStatus } from "@/app/lib/generated/apis-program/src/generated/types/providerStatus";
 import {
   explorerAccountUrl,
   findAssociatedTokenAddress,
@@ -41,7 +49,6 @@ import {
   DEFAULT_DEADLINE_SECS,
   USDC_DECIMALS,
   USDC_MINT,
-  WORKER_PROVIDER_PDA,
   formatUsdc,
 } from "@/app/lib/constants";
 import {
@@ -82,8 +89,26 @@ function bytesToHex(b: Uint8Array): string {
   return Array.from(b, (n) => n.toString(16).padStart(2, "0")).join("");
 }
 
+// Shape of the provider we resolved from the URL param.
+type ProviderInfo = {
+  pda: Address;
+  authority: Address;
+  status: ProviderStatus;
+  activeJobs: number;
+  totalJobs: number;
+};
+
+type ProviderState =
+  | { kind: "none" }
+  | { kind: "loading"; pda: Address }
+  | { kind: "ok"; info: ProviderInfo }
+  | { kind: "missing"; pda: Address }
+  | { kind: "error"; pda: Address; message: string };
+
 export default function SubmitPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const providerParam = searchParams.get("provider");
   const { status: walletStatus } = useWalletConnection();
   const session = useWalletSession();
   const client = useSolanaClient();
@@ -114,6 +139,77 @@ export default function SubmitPage() {
     forBuyer: Address;
     entries: JobHistoryEntry[];
   } | null>(null);
+
+  // Provider lookup from URL param. Tagged with the param it was fetched
+  // for so a URL change doesn't briefly show stale data.
+  const [providerFetch, setProviderFetch] = useState<{
+    forParam: string;
+    state: ProviderState;
+  } | null>(null);
+
+  // Fetch the Provider account whenever the URL param changes. If the
+  // param is absent we leave any prior fetch in place (the derived
+  // `providerState` below filters it out by tag-mismatch) so the
+  // effect body has no synchronous setState — React 19 strict pattern.
+  useEffect(() => {
+    if (!providerParam) return;
+    let cancelled = false;
+    void (async () => {
+      setProviderFetch({
+        forParam: providerParam,
+        state: { kind: "loading", pda: providerParam as Address },
+      });
+      try {
+        const maybeProvider = await fetchMaybeProvider(
+          client.runtime.rpc,
+          providerParam as Address,
+        );
+        if (cancelled) return;
+        if (!maybeProvider.exists) {
+          setProviderFetch({
+            forParam: providerParam,
+            state: { kind: "missing", pda: providerParam as Address },
+          });
+          return;
+        }
+        const p = maybeProvider.data;
+        setProviderFetch({
+          forParam: providerParam,
+          state: {
+            kind: "ok",
+            info: {
+              pda: providerParam as Address,
+              authority: p.authority,
+              status: p.status,
+              activeJobs: Number(p.activeJobs),
+              totalJobs: Number(p.totalJobs),
+            },
+          },
+        });
+      } catch (err) {
+        if (cancelled) return;
+        setProviderFetch({
+          forParam: providerParam,
+          state: {
+            kind: "error",
+            pda: providerParam as Address,
+            message: err instanceof Error ? err.message : String(err),
+          },
+        });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [providerParam, client]);
+
+  // Derived: only show provider state if it matches the current URL param.
+  const providerState: ProviderState =
+    providerFetch && providerFetch.forParam === providerParam
+      ? providerFetch.state
+      : providerParam
+        ? { kind: "loading", pda: providerParam as Address }
+        : { kind: "none" };
 
   const buyerSigner: TransactionSigner | undefined = useMemo(() => {
     if (!session) return undefined;
@@ -191,10 +287,19 @@ export default function SubmitPage() {
     prompt.trim().length > 0 &&
     priceLamports != null &&
     priceLamports > BigInt(0) &&
-    !insufficient;
+    !insufficient &&
+    providerState.kind === "ok";
 
   const handleSubmit = async () => {
-    if (!buyerSigner || !buyerAddress || !priceLamports) return;
+    if (
+      !buyerSigner ||
+      !buyerAddress ||
+      !priceLamports ||
+      providerState.kind !== "ok"
+    ) {
+      return;
+    }
+    const selectedProvider = providerState.info.pda;
     setBusy("Preparing job…");
     setOpError(null);
     sendTx.reset();
@@ -231,7 +336,7 @@ export default function SubmitPage() {
       setBusy(`Submitting create_job (${formatUsdc(priceLamports)} USDC)…`);
       const ix = await getCreateJobInstructionAsync({
         buyer: buyerSigner,
-        provider: WORKER_PROVIDER_PDA,
+        provider: selectedProvider,
         usdcMint: USDC_MINT,
         id,
         specHash,
@@ -289,18 +394,20 @@ export default function SubmitPage() {
           <JobHistorySection entries={history} />
         )}
 
+        <ProviderPicker state={providerState} />
+
         <AnimatePresence mode="wait">
-          {walletStatus === "connected" && (
+          {walletStatus === "connected" && providerState.kind === "ok" && (
             <Card key="form">
               <SectionTitle>Job spec</SectionTitle>
               <p className="text-sm text-white/70">
-                Targeting registered worker{" "}
+                Targeting provider{" "}
                 <code className="text-[#14F195]">
-                  {WORKER_PROVIDER_PDA.slice(0, 8)}…
+                  {providerState.info.pda.slice(0, 8)}…
                 </code>
                 . Spec keys are hashed into <code>spec_hash</code> on-chain;
-                the prompt itself is delivered to the worker via a local
-                side-channel (W4 → MCP).
+                the prompt itself is delivered to the worker via the
+                Pinata-backed side-channel.
               </p>
 
               <label className="flex flex-col gap-2 text-sm">
@@ -388,6 +495,154 @@ export default function SubmitPage() {
 }
 
 // ─── Sub-components ──────────────────────────────────────────────────────
+
+function ProviderPicker({ state }: { state: ProviderState }) {
+  // No provider in URL → CTA pointing at /network.
+  if (state.kind === "none") {
+    return (
+      <Card>
+        <SectionTitle>Pick a provider</SectionTitle>
+        <p className="text-sm text-white/70">
+          Submitting a job targets a specific registered provider — the
+          worker that will accept and run your inference. Browse the live
+          provider directory and pick one before posting.
+        </p>
+        <Link
+          href="/network"
+          className="inline-flex items-center gap-2 self-start rounded-lg bg-[#14F195] px-5 py-2.5 font-mono text-sm font-semibold uppercase tracking-wider text-black shadow-[0_0_30px_-5px_rgba(20,241,149,0.6)] transition hover:scale-[1.02]"
+        >
+          Browse providers
+          <ArrowRight className="h-4 w-4" strokeWidth={2} />
+        </Link>
+      </Card>
+    );
+  }
+
+  // Fetching.
+  if (state.kind === "loading") {
+    return (
+      <Card>
+        <p className="font-mono text-xs uppercase tracking-wider text-white/40">
+          Resolving provider {state.pda.slice(0, 8)}…
+        </p>
+      </Card>
+    );
+  }
+
+  // Param points at a non-existent / non-Provider account.
+  if (state.kind === "missing") {
+    return (
+      <Card>
+        <p className="font-mono text-xs uppercase tracking-wider text-[#FF3B5C]">
+          Provider not found
+        </p>
+        <p className="text-sm text-white/65">
+          The URL points at{" "}
+          <code className="text-white/85">{state.pda}</code> but no
+          Provider PDA exists at that address. It may have been deregistered.
+        </p>
+        <Link
+          href="/network"
+          className="inline-flex items-center gap-2 self-start font-mono text-xs uppercase tracking-wider text-[#14F195] underline-offset-2 hover:underline"
+        >
+          Browse providers <ArrowRight className="h-3.5 w-3.5" strokeWidth={2} />
+        </Link>
+      </Card>
+    );
+  }
+
+  if (state.kind === "error") {
+    return (
+      <Card>
+        <p className="font-mono text-xs uppercase tracking-wider text-[#FF3B5C]">
+          Couldn&apos;t resolve provider
+        </p>
+        <pre className="overflow-auto rounded bg-black/60 p-3 text-xs text-white/70">
+          {state.message}
+        </pre>
+      </Card>
+    );
+  }
+
+  // OK — show the selected provider.
+  const { info } = state;
+  const statusName = ProviderStatus[info.status] ?? `Unknown(${info.status})`;
+  const isActive = info.status === ProviderStatus.Active;
+  return (
+    <Card>
+      <div className="flex flex-wrap items-baseline justify-between gap-3">
+        <SectionTitle>Selected provider</SectionTitle>
+        <Link
+          href="/network"
+          className="font-mono text-[10px] uppercase tracking-wider text-white/45 underline-offset-2 hover:text-[#14F195] hover:underline"
+        >
+          change
+        </Link>
+      </div>
+      <div className="grid grid-cols-1 gap-2 text-xs md:grid-cols-2">
+        <Row
+          label="Provider PDA"
+          value={info.pda}
+          link={explorerAccountUrl(info.pda)}
+        />
+        <Row
+          label="Authority"
+          value={info.authority}
+          link={explorerAccountUrl(info.authority)}
+        />
+        <Row label="Status" value={statusName} highlight={isActive} />
+        <Row
+          label="Jobs (active / total)"
+          value={`${info.activeJobs} / ${info.totalJobs}`}
+        />
+      </div>
+      {!isActive && (
+        <p className="font-mono text-xs text-[#FF3B5C]">
+          This provider is not in Active status — your job may not be picked
+          up. Consider choosing a different provider.
+        </p>
+      )}
+    </Card>
+  );
+}
+
+function Row({
+  label,
+  value,
+  link,
+  highlight,
+}: {
+  label: string;
+  value: string;
+  link?: string;
+  highlight?: boolean;
+}) {
+  return (
+    <div className="flex items-baseline gap-2 font-mono">
+      <span className="text-white/40">{label}</span>
+      {link ? (
+        <a
+          href={link}
+          target="_blank"
+          rel="noreferrer"
+          className={
+            highlight
+              ? "break-all text-[#14F195] underline-offset-2 hover:underline"
+              : "break-all text-white/80 underline-offset-2 hover:text-[#14F195] hover:underline"
+          }
+        >
+          {value}
+        </a>
+      ) : (
+        <span
+          className={highlight ? "break-all text-[#14F195]" : "break-all text-white/80"}
+        >
+          {value}
+        </span>
+      )}
+    </div>
+  );
+}
 
 function FaucetRow({
   pubkey,
