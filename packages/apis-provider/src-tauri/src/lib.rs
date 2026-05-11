@@ -1,6 +1,7 @@
 // Apis Provider — Tauri shell that manages the apis_worker Python
 // subprocess and exposes a small command surface to the React UI.
 
+mod gpu_monitor;
 mod tray;
 mod worker;
 
@@ -29,6 +30,9 @@ pub fn run() {
         })
         .setup(|app| {
             tray::build_tray(&app.handle())?;
+            // Background GPU sampler — fires `gpu-status` events on
+            // a 5s cadence. Frontend owns the auto-pause policy.
+            gpu_monitor::start_monitor(&app.handle());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
