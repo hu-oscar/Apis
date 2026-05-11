@@ -18,11 +18,14 @@ import { listen } from "@tauri-apps/api/event";
 import "./App.css";
 import {
   DEFAULT_SETTINGS,
+  hasOnboarded,
   loadSettings,
+  markOnboarded,
   saveSettings,
   settingsToWorkerEnv,
   type Settings,
 } from "./lib/settings";
+import { Onboarding } from "./components/Onboarding";
 import {
   buildTimeline,
   phaseAccent,
@@ -75,12 +78,15 @@ function App() {
   // Tauri Store plugin (writes JSON to the app's local data dir).
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [showOnboarding, setShowOnboarding] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      const s = await loadSettings();
-      if (!cancelled) setSettings(s);
+      const [s, onboarded] = await Promise.all([loadSettings(), hasOnboarded()]);
+      if (cancelled) return;
+      setSettings(s);
+      setShowOnboarding(!onboarded);
     })();
     return () => {
       cancelled = true;
@@ -290,6 +296,19 @@ function App() {
             setSettings(next);
             setSettingsOpen(false);
           }}
+        />
+      )}
+
+      {showOnboarding && (
+        <Onboarding
+          initial={settings}
+          onComplete={async (next) => {
+            await saveSettings(next);
+            await markOnboarded();
+            setSettings(next);
+            setShowOnboarding(false);
+          }}
+          onSkip={() => setShowOnboarding(false)}
         />
       )}
     </div>
