@@ -6,7 +6,7 @@ Pay USDC, get IPFS results, settled on-chain via an open Anchor program.
 No accounts, no middleman, no vendor lock-in. Buyers post jobs, registered
 workers pick them up, escrow releases on proof of completion.
 
-Two surfaces, one program:
+Four surfaces, one program:
 
 - **Buyer web app** at `apis-web-five.vercel.app` — browse providers
   with live hardware specs, submit jobs, watch them run, settle on-chain.
@@ -14,9 +14,16 @@ Two surfaces, one program:
   publish signed liveness heartbeats with chip / RAM / speed / price,
   monitor earnings + GPU utilization, auto-pause when other apps need
   the GPU.
+- **MCP server** with **x402 paywall** — exposes the marketplace as
+  four MCP tools (`list_providers`, `quote_inference`, `submit_job`,
+  `get_status`). Agents pay via HTTP 402-style SPL USDC transfers; the
+  server signs all on-chain instructions on their behalf.
+- **Atlas-7 autonomous agent** — Claude Sonnet 4.5 in a tool-use loop,
+  reads the live network, picks a provider, refines the prompt, pays
+  via x402, downloads the result. Zero human in the loop.
 
 > Submitted to **Dev3pack hackathon — Solana track ($10k pool)** ·
-> tagged **v0.3.0** (Phase 1.5 — complete + beautiful + provider-aware web).
+> tagged **v0.4.0** (Phase 1.5 — MCP + x402 + autonomous agent).
 
 ---
 
