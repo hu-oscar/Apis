@@ -40,6 +40,12 @@ import {
   type ProviderQueryResult,
 } from "./lib/provider-status";
 import { setTrayState } from "./lib/tray";
+import {
+  aggregateEarnings,
+  loadHistory,
+  saveHistory,
+  type HistoryEntry,
+} from "./lib/job-history";
 
 type DerivedProvider = { authority: string; pda: string };
 
@@ -75,6 +81,17 @@ function App() {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const logScrollRef = useRef<HTMLDivElement>(null);
 
+  // Persistent job history: hydrated from the Tauri store on mount,
+  // appended-to when the live timeline observes a new completion.
+  const [history, setHistory] = useState<HistoryEntry[]>([]);
+  // Set of PDAs we've already persisted, so the timeline observer
+  // doesn't double-write on every re-render.
+  const persistedPdas = useRef<Set<string>>(new Set());
+  // Wall-clock reference for relative-time + 24h bucketing. Tick
+  // every 30 s so the EarningsCard stays accurate without burning
+  // re-renders on every animation frame.
+  const [nowMs, setNowMs] = useState<number>(() => Date.now());
+
   // Settings: loaded on mount, edited in the drawer, saved via the
   // Tauri Store plugin (writes JSON to the app's local data dir).
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
@@ -84,14 +101,29 @@ function App() {
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      const [s, onboarded] = await Promise.all([loadSettings(), hasOnboarded()]);
+      const [s, onboarded, h] = await Promise.all([
+        loadSettings(),
+        hasOnboarded(),
+        loadHistory(),
+      ]);
       if (cancelled) return;
       setSettings(s);
       setShowOnboarding(!onboarded);
+      setHistory(h);
+      // Seed the dedup set so we don't re-persist what's already on disk.
+      for (const e of h) persistedPdas.current.add(e.shortPda);
     })();
     return () => {
       cancelled = true;
     };
+  }, []);
+
+  // Wall-clock tick for the 24h bucket + the "Xm ago" labels. 30 s
+  // resolution is enough — earnings totals don't change between ticks,
+  // only their bucket assignment does.
+  useEffect(() => {
+    const id = setInterval(() => setNowMs(Date.now()), 30_000);
+    return () => clearInterval(id);
   }, []);
 
   // Provider PDA: derived from the worker keypair (via Python helper)
@@ -208,6 +240,56 @@ function App() {
     }
   }, [logs]);
 
+  // Live timeline reduced from the in-memory log buffer. Hoisted out
+  // of TimelinePanel so the persistence effect + the EarningsCard can
+  // share the same memoized list.
+  const timeline = useMemo(() => buildTimeline(logs), [logs]);
+
+  // Observe the timeline for newly-completed jobs and append them to
+  // the persisted history. Dedup via `persistedPdas` so re-renders
+  // (which happen on every log line) don't re-write the same entry.
+  useEffect(() => {
+    const fresh: HistoryEntry[] = [];
+    for (const j of timeline) {
+      if (j.phase !== "completed") continue;
+      if (persistedPdas.current.has(j.shortPda)) continue;
+      persistedPdas.current.add(j.shortPda);
+      fresh.push({
+        shortPda: j.shortPda,
+        completedAt: j.lastUpdate,
+        priceUsdcBase: (j.priceLamports ?? 0n).toString(),
+        buyer: j.buyer ?? "",
+        resultUrl: j.resultUrl,
+        submitTxUrl: j.submitTxUrl,
+        proofHashHex: j.proofHashHex,
+      });
+    }
+    if (fresh.length === 0) return;
+    // Prepend (newest-first) and persist asynchronously. We don't
+    // await the save: a transient store failure shouldn't keep the UI
+    // out of sync — next completion will retry.
+    setHistory((prev) => {
+      const next = [...fresh, ...prev];
+      void saveHistory(next);
+      return next;
+    });
+  }, [timeline]);
+
+  // Pending = sum of buyer-specified prices for jobs that are still
+  // running (any phase before completed/failed).
+  const inFlightPrices = useMemo<bigint[]>(
+    () =>
+      timeline
+        .filter((j) => j.phase !== "completed" && j.phase !== "failed")
+        .map((j) => j.priceLamports ?? 0n),
+    [timeline],
+  );
+
+  const earnings = useMemo(
+    () => aggregateEarnings(history, inFlightPrices, nowMs),
+    [history, inFlightPrices, nowMs],
+  );
+
   // Reconcile UI state with actual worker state every 5 s. Also
   // mirrors the live status to the menu-bar tray so a glance is
   // enough to know whether jobs are still being served — even when
@@ -285,12 +367,13 @@ function App() {
             registerBusy={registerBusy}
             onRegister={handleRegister}
           />
-          <EarningsCard />
+          <EarningsCard earnings={earnings} />
+          <JobHistoryCard history={history} nowMs={nowMs} />
           <NetworkCard apiBase={settings.apisApiBase} />
         </aside>
 
         <section className="right-col">
-          <TimelinePanel logs={logs} />
+          <TimelinePanel timeline={timeline} />
           <LogPanel logs={logs} error={error} scrollRef={logScrollRef} />
         </section>
       </main>
@@ -684,24 +767,106 @@ function providerStatusLabel(s: ProviderStatus): string {
   }
 }
 
-function EarningsCard() {
+function EarningsCard({
+  earnings,
+}: {
+  earnings: { lifetime: bigint; last24h: bigint; pending: bigint };
+}) {
   return (
     <div className="card">
       <h3>Earnings</h3>
       <div className="kv-row">
         <span className="kv-label">Lifetime</span>
-        <span className="kv-value green">0.00 USDC</span>
+        <span className="kv-value green">{formatUsdcBase(earnings.lifetime)} USDC</span>
       </div>
       <div className="kv-row">
         <span className="kv-label">Last 24h</span>
-        <span className="kv-value">0.00 USDC</span>
+        <span className="kv-value">{formatUsdcBase(earnings.last24h)} USDC</span>
       </div>
       <div className="kv-row">
         <span className="kv-label">Pending (escrow)</span>
-        <span className="kv-value violet">0.00 USDC</span>
+        <span className="kv-value violet">{formatUsdcBase(earnings.pending)} USDC</span>
       </div>
     </div>
   );
+}
+
+// ── Job history (persisted) ──────────────────────────────────────────
+
+function JobHistoryCard({
+  history,
+  nowMs,
+}: {
+  history: HistoryEntry[];
+  nowMs: number;
+}) {
+  const last10 = history.slice(0, 10);
+  return (
+    <div className="card">
+      <h3>
+        <span>Recent jobs</span>
+        {history.length > 0 && (
+          <span className="count">{history.length} total</span>
+        )}
+      </h3>
+      {last10.length === 0 ? (
+        <p className="provider-hint">
+          No completed jobs yet. Once you serve one, the last 10 show
+          up here across restarts.
+        </p>
+      ) : (
+        <div className="history-list">
+          {last10.map((e) => (
+            <HistoryRow key={e.shortPda} entry={e} nowMs={nowMs} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function HistoryRow({ entry, nowMs }: { entry: HistoryEntry; nowMs: number }) {
+  // BigInt parsing is wrapped because a malformed persisted entry
+  // (e.g. an old log written before the price format settled) would
+  // crash the whole panel otherwise.
+  let price: bigint;
+  try {
+    price = BigInt(entry.priceUsdcBase);
+  } catch {
+    price = 0n;
+  }
+  return (
+    <div className="history-row">
+      <div className="history-meta">
+        <span className="history-pda">{entry.shortPda}…</span>
+        <span className="history-detail">
+          <span className="green">{formatUsdcBase(price)} USDC</span>
+          <span className="dim">·</span>
+          <span>{formatRelativeTime(entry.completedAt, nowMs)}</span>
+          {entry.resultUrl && (
+            <a href={entry.resultUrl} target="_blank" rel="noreferrer">
+              result ↗
+            </a>
+          )}
+          {entry.submitTxUrl && (
+            <a href={entry.submitTxUrl} target="_blank" rel="noreferrer">
+              tx ↗
+            </a>
+          )}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+/** Pure relative-time formatter — takes `nowMs` so callers can use
+ *  it inside render without violating React 19's purity rule. */
+function formatRelativeTime(ts: number, nowMs: number): string {
+  const delta = nowMs - ts;
+  if (delta < 60_000) return "just now";
+  if (delta < 3_600_000) return `${Math.floor(delta / 60_000)}m ago`;
+  if (delta < 86_400_000) return `${Math.floor(delta / 3_600_000)}h ago`;
+  return `${Math.floor(delta / 86_400_000)}d ago`;
 }
 
 function NetworkCard({ apiBase }: { apiBase: string }) {
@@ -736,11 +901,7 @@ function prettyHost(url: string): string {
 
 // ── Timeline ─────────────────────────────────────────────────────────
 
-function TimelinePanel({ logs }: { logs: LogEntry[] }) {
-  // Recompute the timeline only when the logs array changes. Building
-  // it is cheap (regex passes), but the JSX cost grows with N jobs —
-  // useMemo keeps the render side stable.
-  const timeline = useMemo(() => buildTimeline(logs), [logs]);
+function TimelinePanel({ timeline }: { timeline: JobState[] }) {
   // Newest first.
   const ordered = useMemo(
     () => [...timeline].sort((a, b) => b.startedAt - a.startedAt),
