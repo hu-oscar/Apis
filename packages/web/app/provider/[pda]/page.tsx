@@ -35,6 +35,10 @@ import { JobStatus } from "@/app/lib/generated/apis-program/src/generated/types/
 import { explorerAccountUrl } from "@/app/lib/apis";
 import { WORKER_PROVIDER_PDA, formatUsdc } from "@/app/lib/constants";
 import { ApisLogo } from "@/app/components/ui/apis-logo";
+import {
+  fetchHeartbeat,
+  type HeartbeatStatus,
+} from "@/app/lib/heartbeat-client";
 
 type ProviderInfo = {
   pda: Address;
@@ -56,7 +60,13 @@ type JobRow = {
 
 type ProviderState =
   | { kind: "loading" }
-  | { kind: "ok"; info: ProviderInfo; jobs: JobRow[]; fetchedAt: number }
+  | {
+      kind: "ok";
+      info: ProviderInfo;
+      jobs: JobRow[];
+      heartbeat: HeartbeatStatus;
+      fetchedAt: number;
+    }
   | { kind: "missing" }
   | { kind: "error"; message: string };
 
@@ -156,7 +166,17 @@ export default function ProviderDetailsPage() {
           };
         });
 
-        setState({ kind: "ok", info, jobs, fetchedAt: Date.now() });
+        // 3. Liveness heartbeat (Sprint 1.5/1.6).
+        const heartbeat = await fetchHeartbeat(pda);
+        if (cancelled) return;
+
+        setState({
+          kind: "ok",
+          info,
+          jobs,
+          heartbeat,
+          fetchedAt: Date.now(),
+        });
       } catch (err) {
         if (cancelled) return;
         setState({
@@ -230,7 +250,12 @@ export default function ProviderDetailsPage() {
         )}
 
         {state.kind === "ok" && (
-          <ProviderBody info={state.info} jobs={state.jobs} fetchedAt={state.fetchedAt} />
+          <ProviderBody
+            info={state.info}
+            jobs={state.jobs}
+            heartbeat={state.heartbeat}
+            fetchedAt={state.fetchedAt}
+          />
         )}
       </div>
     </main>
@@ -242,10 +267,12 @@ export default function ProviderDetailsPage() {
 function ProviderBody({
   info,
   jobs,
+  heartbeat,
   fetchedAt,
 }: {
   info: ProviderInfo;
   jobs: JobRow[];
+  heartbeat: HeartbeatStatus;
   fetchedAt: number;
 }) {
   const statusName = ProviderStatus[info.status] ?? `Unknown(${info.status})`;
@@ -254,9 +281,10 @@ function ProviderBody({
     <div className="space-y-6">
       <Card>
         <div className="flex flex-wrap items-start justify-between gap-4">
-          <div className="space-y-2">
+          <div className="flex flex-wrap items-center gap-3">
             <SectionTitle>On-chain identity</SectionTitle>
             <StatusBadge label={statusName} active={isActive} />
+            <LivenessBadge heartbeat={heartbeat} />
           </div>
           <Link
             href={`/submit?provider=${info.pda}`}
@@ -354,6 +382,53 @@ function JobLine({ job }: { job: JobRow }) {
 }
 
 // ─── Small primitives ──────────────────────────────────────────────────
+
+function LivenessBadge({ heartbeat }: { heartbeat: HeartbeatStatus }) {
+  if (heartbeat.kind === "online") {
+    const age = Math.max(0, Math.round(heartbeat.ageMs / 1000));
+    return (
+      <span className="inline-flex items-center gap-2 rounded-full border border-[#14F195]/40 bg-[#14F195]/[0.08] px-3 py-1 font-mono text-[10px] uppercase tracking-wider text-[#14F195]">
+        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#14F195] shadow-[0_0_8px_rgba(20,241,149,0.8)]" />
+        live · {age}s ago
+      </span>
+    );
+  }
+  if (heartbeat.kind === "offline") {
+    const detail =
+      heartbeat.lastSeen && heartbeat.ageMs != null
+        ? `last seen ${formatDuration(heartbeat.ageMs)} ago`
+        : "never seen";
+    return (
+      <span className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/[0.04] px-3 py-1 font-mono text-[10px] uppercase tracking-wider text-white/50">
+        <span className="h-1.5 w-1.5 rounded-full bg-white/30" />
+        offline · {detail}
+      </span>
+    );
+  }
+  if (heartbeat.kind === "error") {
+    return (
+      <span className="inline-flex items-center gap-2 rounded-full border border-[#FF3B5C]/30 bg-[#FF3B5C]/[0.05] px-3 py-1 font-mono text-[10px] uppercase tracking-wider text-[#FF3B5C]">
+        liveness probe failed
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 font-mono text-[10px] uppercase tracking-wider text-white/40">
+      checking liveness…
+    </span>
+  );
+}
+
+function formatDuration(ms: number): string {
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.round(m / 60);
+  if (h < 48) return `${h}h`;
+  const d = Math.round(h / 24);
+  return `${d}d`;
+}
 
 function StatusBadge({ label, active }: { label: string; active: boolean }) {
   return (

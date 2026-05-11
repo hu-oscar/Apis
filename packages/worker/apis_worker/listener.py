@@ -18,6 +18,7 @@ from solders.rpc.config import RpcTransactionLogsFilterMentions
 
 from .config import APIS_PROGRAM_ID, RPC_WS_URL
 from .decoder import EventDecoder, load_event_decoders, try_decode_event
+from .heartbeat import heartbeat_loop
 from .inference import run_inference
 from .ipfs import public_url, upload_png
 from .result_channel import store_result
@@ -29,6 +30,15 @@ log = logging.getLogger("apis_worker")
 
 # Anchor's emit! macro prints event payloads as: "Program data: <base64>"
 _EMIT_PREFIX = "Program data: "
+
+# Serializes the full job pipeline (accept_job → inference → IPFS upload →
+# submit_completion). mflux + Flux Schnell takes ~12-15 GB of unified
+# memory per process; running two pipelines concurrently on M3 Pro 18 GB
+# thrashes the Metal command queue and slows each by ~5×. This lock keeps
+# the worker single-threaded against the GPU; new jobs queue at
+# `async with _job_lock` and are processed in arrival order. (Python's
+# asyncio.Lock is FIFO since 3.11, which matches what we want.)
+_job_lock: asyncio.Lock = asyncio.Lock()
 
 
 def _find_provider_pda(authority: Pubkey, program_id: Pubkey) -> Pubkey:
@@ -70,6 +80,12 @@ async def listen_for_jobs() -> None:
     log.info("worker authority:  %s", worker_keypair.pubkey())
     log.info("worker provider:   %s", our_provider_pda)
 
+    # Background liveness heartbeat — runs alongside the WS listener.
+    # Posts to ${APIS_API_BASE}/api/heartbeat/<pda> every 30s; the UI
+    # reads it for the real "online" indicator. No-op if APIS_API_BASE
+    # is unset (local-only dev).
+    hb_task = asyncio.create_task(heartbeat_loop(str(our_provider_pda)))
+
     backoff = _RECONNECT_INITIAL_BACKOFF_S
     while True:
         try:
@@ -109,6 +125,7 @@ async def listen_for_jobs() -> None:
             )
         except asyncio.CancelledError:
             log.info("listener cancelled; shutting down")
+            hb_task.cancel()
             raise
         await asyncio.sleep(backoff)
         backoff = min(backoff * 2, _RECONNECT_MAX_BACKOFF_S)
@@ -181,6 +198,21 @@ async def _process_job(fields: dict, worker_keypair: Keypair) -> None:
         log.warning("│  spec for %s missing prompt; skip", spec_hash.hex()[:16])
         return
 
+    # Serialize the pipeline: only one job runs at a time on this worker.
+    # If another job is mid-flight, new ones queue here in arrival order.
+    if _job_lock.locked():
+        log.info("│  waiting for GPU lock (another job in flight)…")
+    async with _job_lock:
+        await _run_pipeline_locked(job_pda, spec, prompt, worker_keypair)
+
+
+async def _run_pipeline_locked(
+    job_pda: Pubkey,
+    spec: dict,
+    prompt: str,
+    worker_keypair: Keypair,
+) -> None:
+    """Job pipeline. Caller holds `_job_lock`."""
     try:
         # 1. accept_job: Funded → Started
         log.info("│  [1/4] accept_job …")
