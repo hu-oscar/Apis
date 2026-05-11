@@ -1,116 +1,351 @@
-.logo.vite:hover {
-  filter: drop-shadow(0 0 2em #747bff);
-}
+/* Apis Provider — Cyberpunk Swarm palette. Mirrors the web app's
+   styling so the desktop and browser experience feel like one product. */
 
-.logo.react:hover {
-  filter: drop-shadow(0 0 2em #61dafb);
-}
 :root {
-  font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
-  font-size: 16px;
-  line-height: 24px;
-  font-weight: 400;
+  --bg-black: #000;
+  --bg-deep: #07060d;
+  --fg: #fafaf9;
+  --solana-green: #14f195;
+  --neon-violet: #9945ff;
+  --warn-red: #ff3b5c;
+  --warn-amber: #ffc857;
+  --white-05: rgba(255, 255, 255, 0.05);
+  --white-10: rgba(255, 255, 255, 0.1);
+  --white-15: rgba(255, 255, 255, 0.15);
+  --white-40: rgba(255, 255, 255, 0.4);
+  --white-60: rgba(255, 255, 255, 0.6);
+  --white-85: rgba(255, 255, 255, 0.85);
 
-  color: #0f0f0f;
-  background-color: #f6f6f6;
+  --font-mono: ui-monospace, "SF Mono", "Menlo", "Consolas", monospace;
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, "Inter", "Helvetica Neue", sans-serif;
 
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  -webkit-text-size-adjust: 100%;
+  font-family: var(--font-sans);
+  color-scheme: dark;
 }
 
-.container {
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
   margin: 0;
-  padding-top: 10vh;
+  padding: 0;
+  height: 100%;
+  background: var(--bg-black);
+  color: var(--fg);
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+.app-shell {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  height: 100vh;
+  background:
+    radial-gradient(
+      circle at 20% 30%,
+      rgba(153, 69, 255, 0.08),
+      transparent 50%
+    ),
+    radial-gradient(
+      circle at 80% 70%,
+      rgba(20, 241, 149, 0.05),
+      transparent 60%
+    ),
+    var(--bg-black);
+}
+
+/* ── Top bar ───────────────────────────────────────────────────────── */
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--white-10);
+  background: rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(8px);
+  -webkit-app-region: drag;
+}
+
+.topbar > * {
+  -webkit-app-region: no-drag;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.brand img {
+  width: 26px;
+  height: 26px;
+}
+
+.brand-name {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 15px;
+  letter-spacing: -0.2px;
+}
+
+.brand-tag {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  color: var(--neon-violet);
+  background: rgba(153, 69, 255, 0.15);
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.online-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: var(--white-05);
+  border: 1px solid var(--white-15);
+  color: var(--white-60);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  cursor: pointer;
+  transition: 120ms ease;
+}
+
+.online-toggle:hover {
+  border-color: var(--white-40);
+  color: var(--white-85);
+}
+
+.online-toggle.is-online {
+  background: rgba(20, 241, 149, 0.12);
+  border-color: rgba(20, 241, 149, 0.5);
+  color: var(--solana-green);
+}
+
+.online-toggle.is-online .dot {
+  background: var(--solana-green);
+  box-shadow: 0 0 8px rgba(20, 241, 149, 0.85);
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+.online-toggle .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--white-40);
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+.settings-btn {
+  background: none;
+  border: 1px solid var(--white-15);
+  color: var(--white-60);
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: 120ms ease;
+  font-family: var(--font-mono);
+  font-size: 14px;
+}
+
+.settings-btn:hover {
+  border-color: var(--white-40);
+  color: var(--white-85);
+}
+
+/* ── Main grid ─────────────────────────────────────────────────────── */
+
+.main {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  gap: 16px;
+  padding: 16px 20px;
+  overflow: hidden;
+}
+
+.left-col {
   display: flex;
   flex-direction: column;
-  justify-content: center;
-  text-align: center;
+  gap: 16px;
+  overflow-y: auto;
 }
 
-.logo {
-  height: 6em;
-  padding: 1.5em;
-  will-change: filter;
-  transition: 0.75s;
-}
-
-.logo.tauri:hover {
-  filter: drop-shadow(0 0 2em #24c8db);
-}
-
-.row {
+.right-col {
   display: flex;
-  justify-content: center;
+  flex-direction: column;
+  gap: 16px;
+  overflow: hidden;
 }
 
-a {
+.card {
+  border: 1px solid var(--white-10);
+  background:
+    linear-gradient(
+      to bottom,
+      rgba(255, 255, 255, 0.03),
+      rgba(255, 255, 255, 0.01)
+    );
+  border-radius: 12px;
+  padding: 16px;
+}
+
+.card h3 {
+  margin: 0 0 12px 0;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  color: var(--white-40);
   font-weight: 500;
-  color: #646cff;
-  text-decoration: inherit;
 }
 
-a:hover {
-  color: #535bf2;
+.kv-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--white-05);
+  font-size: 12px;
 }
 
-h1 {
-  text-align: center;
+.kv-row:last-child {
+  border-bottom: none;
 }
 
-input,
-button {
+.kv-label {
+  color: var(--white-40);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.kv-value {
+  color: var(--white-85);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-align: right;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kv-value.green {
+  color: var(--solana-green);
+}
+
+.kv-value.violet {
+  color: var(--neon-violet);
+}
+
+.kv-value.dim {
+  color: var(--white-40);
+}
+
+/* ── Log panel ─────────────────────────────────────────────────────── */
+
+.log-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.log-panel h3 {
+  flex: 0 0 auto;
+}
+
+.log-output {
+  flex: 1;
+  overflow-y: auto;
+  background: rgba(0, 0, 0, 0.5);
+  border: 1px solid var(--white-05);
   border-radius: 8px;
-  border: 1px solid transparent;
-  padding: 0.6em 1.2em;
-  font-size: 1em;
-  font-weight: 500;
-  font-family: inherit;
-  color: #0f0f0f;
-  background-color: #ffffff;
-  transition: border-color 0.25s;
-  box-shadow: 0 2px 2px rgba(0, 0, 0, 0.2);
+  padding: 12px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--white-60);
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
 }
 
-button {
-  cursor: pointer;
+.log-line {
+  padding: 1px 0;
 }
 
-button:hover {
-  border-color: #396cd8;
-}
-button:active {
-  border-color: #396cd8;
-  background-color: #e8e8e8;
+.log-line.event {
+  color: var(--solana-green);
 }
 
-input,
-button {
-  outline: none;
+.log-line.warn {
+  color: var(--warn-amber);
 }
 
-#greet-input {
-  margin-right: 5px;
+.log-line.error {
+  color: var(--warn-red);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    color: #f6f6f6;
-    background-color: #2f2f2f;
-  }
+.log-line.dim {
+  color: var(--white-40);
+}
 
-  a:hover {
-    color: #24c8db;
-  }
+.log-empty {
+  color: var(--white-40);
+  font-style: italic;
+}
 
-  input,
-  button {
-    color: #ffffff;
-    background-color: #0f0f0f98;
-  }
-  button:active {
-    background-color: #0f0f0f69;
-  }
+/* ── Bottom status bar ─────────────────────────────────────────────── */
+
+.statusbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 20px;
+  border-top: 1px solid var(--white-10);
+  background: rgba(0, 0, 0, 0.4);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--white-40);
+}
+
+.statusbar a {
+  color: var(--white-60);
+  text-decoration: none;
+}
+
+.statusbar a:hover {
+  color: var(--solana-green);
 }
