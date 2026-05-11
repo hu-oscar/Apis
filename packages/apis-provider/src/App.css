@@ -746,6 +746,65 @@ body,
   background: var(--warn-red);
 }
 
+/* ── Job history (persisted last-10 panel, Sprint 2.8) ───────────── */
+
+.history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.history-row {
+  padding: 8px 10px;
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid var(--white-05);
+  border-radius: 6px;
+}
+
+.history-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.history-pda {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-detail {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--white-60);
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: baseline;
+}
+
+.history-detail .green {
+  color: var(--solana-green);
+}
+
+.history-detail .dim {
+  color: var(--white-40);
+}
+
+.history-detail a {
+  color: var(--white-60);
+  text-decoration: none;
+}
+
+.history-detail a:hover {
+  color: var(--solana-green);
+}
+
 /* ── Onboarding wizard ────────────────────────────────────────────── */
 
 .onboarding-backdrop {
