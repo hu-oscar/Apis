@@ -278,14 +278,20 @@ Apis/
 │   │   ├── app/
 │   │   │   ├── page.tsx                     # landing (live stats)
 │   │   │   ├── network/page.tsx             # provider + job browse
+│   │   │   ├── provider/[pda]/page.tsx      # provider profile + hardware
 │   │   │   ├── submit/page.tsx              # buyer flow
-│   │   │   ├── job/[id]/page.tsx            # status + image + confirm
+│   │   │   ├── job/[id]/page.tsx            # status + image + confirm + cancel
+│   │   │   ├── stats/page.tsx               # network telemetry + north star
+│   │   │   ├── history/page.tsx             # wallet-scoped past jobs
+│   │   │   ├── not-found.tsx + error.tsx    # branded chrome
 │   │   │   ├── api/spec/                    # buyer→worker side-channel
 │   │   │   ├── api/results/[pda]/           # worker→buyer side-channel
+│   │   │   ├── api/heartbeat/[pda]/         # signed liveness + hardware
 │   │   │   ├── api/jobs/[pda]/              # combined chain + KV view
 │   │   │   ├── api/faucet/                  # test USDC drip
 │   │   │   └── lib/
 │   │   │       ├── apis-program.ts          # Codama-generated client
+│   │   │       ├── heartbeat-client.ts      # signed heartbeat reader
 │   │   │       ├── pinata-store.ts          # Pinata-as-KV primitive
 │   │   │       └── kv.ts                    # KV abstraction
 │   │   └── DEPLOY.md                        # Vercel runbook
@@ -296,6 +302,8 @@ Apis/
 │       │   ├── inference.py                 # mflux subprocess wrapper
 │       │   ├── ipfs.py                      # Pinata v3 upload
 │       │   ├── submit.py                    # accept_job + submit_completion
+│       │   ├── heartbeat.py                 # signed liveness + hardware
+│       │   ├── benchmark.py                 # one-shot mflux timer (CLI)
 │       │   ├── spec_channel.py              # dual-mode (HTTP / FS)
 │       │   ├── result_channel.py            # dual-mode (HTTP / FS)
 │       │   └── decoder.py                   # event borsh layouts
