@@ -12,7 +12,7 @@
 //         active status + counters in the left rail.
 //   2.6 — `tauri build` → unsigned .dmg + first-launch onboarding wizard.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import "./App.css";
@@ -23,12 +23,14 @@ import {
   settingsToWorkerEnv,
   type Settings,
 } from "./lib/settings";
-
-type LogEntry = {
-  stream: "stdout" | "stderr";
-  line: string;
-  at: number;
-};
+import {
+  buildTimeline,
+  phaseAccent,
+  phaseLabel,
+  phaseProgress,
+  type JobState,
+} from "./lib/event-parser";
+import type { LogEntry } from "./lib/log-types";
 
 function severityFor(entry: LogEntry): "event" | "warn" | "error" | "dim" {
   const line = entry.line;
@@ -168,6 +170,7 @@ function App() {
         </aside>
 
         <section className="right-col">
+          <TimelinePanel logs={logs} />
           <LogPanel logs={logs} error={error} scrollRef={logScrollRef} />
         </section>
       </main>
@@ -500,6 +503,98 @@ function prettyHost(url: string): string {
   } catch {
     return url;
   }
+}
+
+// ── Timeline ─────────────────────────────────────────────────────────
+
+function TimelinePanel({ logs }: { logs: LogEntry[] }) {
+  // Recompute the timeline only when the logs array changes. Building
+  // it is cheap (regex passes), but the JSX cost grows with N jobs —
+  // useMemo keeps the render side stable.
+  const timeline = useMemo(() => buildTimeline(logs), [logs]);
+  // Newest first.
+  const ordered = useMemo(
+    () => [...timeline].sort((a, b) => b.startedAt - a.startedAt),
+    [timeline],
+  );
+  const visible = ordered.slice(0, 8);
+  const activeCount = ordered.filter(
+    (j) => j.phase !== "completed" && j.phase !== "failed",
+  ).length;
+  return (
+    <div className="card timeline-panel">
+      <h3>
+        <span>Jobs</span>
+        <span className="count">
+          {activeCount} active · {ordered.length} total
+        </span>
+      </h3>
+      <div className="timeline-list">
+        {visible.length === 0 ? (
+          <div className="timeline-empty">
+            No jobs yet. Once a buyer sends one to this provider, it shows up
+            here with live phase progress.
+          </div>
+        ) : (
+          visible.map((j) => <TimelineRow key={j.shortPda} job={j} />)
+        )}
+      </div>
+    </div>
+  );
+}
+
+function TimelineRow({ job }: { job: JobState }) {
+  const isActive = job.phase !== "completed" && job.phase !== "failed";
+  const isDone = job.phase === "completed";
+  const isFailed = job.phase === "failed";
+  const accent = phaseAccent(job.phase);
+  return (
+    <div
+      className={
+        "timeline-row " +
+        (isActive ? "active" : isDone ? "done" : isFailed ? "failed" : "")
+      }
+    >
+      <div className="timeline-meta">
+        <div className="timeline-pda">
+          {job.shortPda}
+          {job.priceLamports !== undefined && (
+            <span style={{ color: "var(--white-40)", marginLeft: 10 }}>
+              {formatUsdcBase(job.priceLamports)} USDC
+            </span>
+          )}
+        </div>
+        <div className="timeline-detail">
+          {job.buyer && <span>buyer {job.buyer.slice(0, 6)}…</span>}
+          {job.resultUrl && (
+            <a href={job.resultUrl} target="_blank" rel="noreferrer">
+              result ↗
+            </a>
+          )}
+          {job.submitTxUrl && (
+            <a href={job.submitTxUrl} target="_blank" rel="noreferrer">
+              tx ↗
+            </a>
+          )}
+          {job.failureReason && (
+            <span style={{ color: "var(--warn-red)" }}>
+              {job.failureReason}
+            </span>
+          )}
+        </div>
+      </div>
+      <span className={`timeline-phase ${accent}`}>{phaseLabel(job.phase)}</span>
+      <div className="timeline-bar">
+        <div style={{ width: `${phaseProgress(job.phase) * 100}%` }} />
+      </div>
+    </div>
+  );
+}
+
+function formatUsdcBase(lamports: bigint): string {
+  const whole = lamports / 1_000_000n;
+  const frac = (lamports % 1_000_000n).toString().padStart(6, "0").replace(/0+$/, "");
+  return frac ? `${whole}.${frac}` : `${whole}`;
 }
 
 // ── Logs ─────────────────────────────────────────────────────────────

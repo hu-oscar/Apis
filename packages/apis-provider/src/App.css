@@ -533,3 +533,168 @@ body,
 .settings-status.error {
   color: var(--warn-red);
 }
+
+/* ── Right-pane two-card split ────────────────────────────────────── */
+
+.right-col {
+  /* Override default flex column to give each card a constrained height */
+  display: grid;
+  grid-template-rows: minmax(180px, 35%) 1fr;
+  gap: 16px;
+}
+
+/* ── Timeline panel ───────────────────────────────────────────────── */
+
+.timeline-panel {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.timeline-panel h3 {
+  flex: 0 0 auto;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+
+.timeline-panel h3 .count {
+  color: var(--white-60);
+  font-weight: 400;
+}
+
+.timeline-list {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 2px;
+}
+
+.timeline-empty {
+  color: var(--white-40);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 16px 4px;
+}
+
+.timeline-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 12px;
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid var(--white-05);
+  border-radius: 8px;
+  transition: 120ms ease;
+}
+
+.timeline-row.active {
+  border-color: rgba(153, 69, 255, 0.4);
+  background: rgba(153, 69, 255, 0.06);
+}
+
+.timeline-row.done {
+  opacity: 0.7;
+}
+
+.timeline-row.failed {
+  border-color: rgba(255, 59, 92, 0.4);
+  background: rgba(255, 59, 92, 0.04);
+}
+
+.timeline-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.timeline-pda {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.timeline-detail {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--white-40);
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.timeline-detail a {
+  color: var(--white-60);
+  text-decoration: none;
+}
+
+.timeline-detail a:hover {
+  color: var(--solana-green);
+}
+
+.timeline-phase {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  white-space: nowrap;
+}
+
+.timeline-phase.violet {
+  color: var(--neon-violet);
+  background: rgba(153, 69, 255, 0.12);
+}
+
+.timeline-phase.green {
+  color: var(--solana-green);
+  background: rgba(20, 241, 149, 0.12);
+}
+
+.timeline-phase.amber {
+  color: var(--warn-amber);
+  background: rgba(255, 200, 87, 0.12);
+}
+
+.timeline-phase.red {
+  color: var(--warn-red);
+  background: rgba(255, 59, 92, 0.12);
+}
+
+.timeline-phase.dim {
+  color: var(--white-60);
+  background: rgba(255, 255, 255, 0.05);
+  border-color: var(--white-15);
+}
+
+.timeline-bar {
+  grid-column: 1 / -1;
+  height: 3px;
+  background: var(--white-05);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.timeline-bar > div {
+  height: 100%;
+  background: var(--neon-violet);
+  transition: width 360ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.timeline-row.done .timeline-bar > div {
+  background: var(--solana-green);
+}
+
+.timeline-row.failed .timeline-bar > div {
+  background: var(--warn-red);
+}
