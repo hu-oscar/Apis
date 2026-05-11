@@ -17,6 +17,7 @@
 // inside MCP `content` blocks — that's how Claude sees them.
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { randomUUID } from "node:crypto";
 import { z } from "zod";
 
 import { ProviderStatus } from "./generated/apis-program/src/generated/types/providerStatus.js";
@@ -24,23 +25,34 @@ import { fetchProviders, type ProviderRow } from "./lib/network.js";
 import {
   APIS_API_BASE,
   USDC_DECIMALS,
+  USDC_MINT,
   explorerTxUrl,
   formatUsdc,
 } from "./lib/rpc.js";
-import { buildSpec, postSpec, specHashHex } from "./lib/spec.js";
+import { buildSpec, postSpec, specHashHex, type JobSpec } from "./lib/spec.js";
 import {
   createJobAsServer,
   confirmCompletionAsServer,
 } from "./lib/onchain.js";
 import { loadServerWallet, type ServerWallet } from "./lib/server-wallet.js";
-import type { Address } from "@solana/kit";
+import { deriveUsdcAta, verifyPayment } from "./lib/payment.js";
+import type { Address, Signature } from "@solana/kit";
 
 /** Singleton — initialized on server boot, reused across requests. */
 let serverWallet: ServerWallet | null = null;
+let serverUsdcAta: Address | null = null;
 
 async function getServerWallet(): Promise<ServerWallet> {
   if (!serverWallet) serverWallet = await loadServerWallet();
   return serverWallet;
+}
+
+async function getServerUsdcAta(): Promise<Address> {
+  if (!serverUsdcAta) {
+    const w = await getServerWallet();
+    serverUsdcAta = await deriveUsdcAta(w.address);
+  }
+  return serverUsdcAta;
 }
 
 /** Cached jobs we've signed create_job for, keyed by job PDA. Used
@@ -51,6 +63,30 @@ const pendingJobs = new Map<
   string,
   { providerPda: Address; submittedAt: number }
 >();
+
+/** Outstanding quotes — `payment_id` → {spec, provider, price}. The
+ *  agent must pay the exact `price` USDC to the server's ATA with
+ *  `payment_id` as the SPL memo before calling submit_job. Quotes
+ *  expire after QUOTE_TTL_MS to bound replay risk. Volatile —
+ *  Phase 2 swap for Redis. */
+const QUOTE_TTL_MS = 5 * 60 * 1000;
+
+type Quote = {
+  paymentId: string;
+  providerPda: Address;
+  spec: JobSpec;
+  priceUsdcBase: bigint;
+  expiresAt: number;
+};
+
+const quoteStore = new Map<string, Quote>();
+
+function pruneExpiredQuotes(): void {
+  const now = Date.now();
+  for (const [id, q] of quoteStore) {
+    if (q.expiresAt < now) quoteStore.delete(id);
+  }
+}
 
 export function buildMcpServer(): McpServer {
   const server = new McpServer({
@@ -161,11 +197,28 @@ export function buildMcpServer(): McpServer {
         height: input.height ?? 1024,
         ...(input.seed != null ? { seed: input.seed } : {}),
       });
-      const hashHex = specHashHex(spec);
       const priceBase =
         provider.suggestedPriceUsdcBase ??
         // Fallback if provider hasn't run a benchmark: minimum 0.001 USDC.
         1_000n;
+
+      // Issue a one-shot payment quote — the agent must pay this
+      // exact amount to the server's USDC ATA with `payment_id` as
+      // memo before submit_job will accept the request. This is the
+      // x402 paywall (Sprint 4.4).
+      pruneExpiredQuotes();
+      const paymentId = `apis-${randomUUID()}`;
+      const expiresAt = Date.now() + QUOTE_TTL_MS;
+      quoteStore.set(paymentId, {
+        paymentId,
+        providerPda: provider.pda,
+        spec,
+        priceUsdcBase: priceBase,
+        expiresAt,
+      });
+      const wallet = await getServerWallet();
+      const recipientAta = await getServerUsdcAta();
+
       return {
         content: [
           {
@@ -176,9 +229,22 @@ export function buildMcpServer(): McpServer {
                 price_usdc_base: priceBase.toString(),
                 price_usdc: formatUsdc(priceBase),
                 estimated_seconds: provider.secondsPerImage,
-                spec_hash_hex: hashHex,
-                deadline_seconds: 600,
-                payment_required_after_seconds: 300,
+                spec_hash_hex: specHashHex(spec),
+                job_deadline_seconds: 600,
+                payment: {
+                  payment_id: paymentId,
+                  pay_to_owner: wallet.address,
+                  pay_to_ata: recipientAta,
+                  pay_mint: USDC_MINT,
+                  pay_amount_usdc_base: priceBase.toString(),
+                  pay_amount_usdc: formatUsdc(priceBase),
+                  pay_memo: paymentId,
+                  expires_at_unix_ms: expiresAt,
+                  instructions:
+                    "Submit a Solana tx that (1) SPL-transfers " +
+                    formatUsdc(priceBase) +
+                    " USDC from your ATA to pay_to_ata + (2) attaches a memo instruction whose text equals pay_memo. Pass the resulting tx signature back to submit_job as `payment_signature`.",
+                },
                 explorer_provider: `https://explorer.solana.com/address/${provider.pda}?cluster=devnet`,
               },
               null,
@@ -190,65 +256,82 @@ export function buildMcpServer(): McpServer {
     },
   );
 
-  // ── submit_job ───────────────────────────────────────────────────
+  // ── submit_job (x402-paywalled) ──────────────────────────────────
   server.registerTool(
     "submit_job",
     {
-      title: "Submit a Flux Schnell job and pay escrow",
+      title: "Submit a Flux Schnell job (requires x402 payment)",
       description:
-        "POSTs the spec to the marketplace side-channel, then signs " +
-        "create_job from the MCP server's hot wallet — USDC moves into the " +
-        "on-chain escrow vault. The worker picks the job up via WebSocket. " +
-        "Sprint 4.4 will paywall this tool via x402 (HTTP 402 + X-Payment " +
-        "header). Today it executes directly; the server's hot wallet pays.",
+        "Submits a job for execution. REQUIRES a payment receipt: first " +
+        "call quote_inference to get a `payment_id` + payment details, " +
+        "then sign + send an SPL USDC transfer to the server's ATA " +
+        "(memo = payment_id), then pass that tx signature here as " +
+        "`payment_signature`. The server verifies the transfer on chain " +
+        "before signing create_job from its hot wallet. USDC then moves " +
+        "into the on-chain escrow vault and the worker picks the job up.",
       inputSchema: {
-        provider_pda: z
+        payment_id: z
           .string()
-          .describe("Provider PDA returned by list_providers / quote_inference."),
-        prompt: z.string().max(256).describe("Flux Schnell prompt."),
-        max_price_usdc: z
-          .number()
           .describe(
-            "Hard cap on what the server will pay into escrow. USDC, not base units.",
+            "The payment_id returned by quote_inference. Identifies which quote you're paying for.",
           ),
-        width: z.number().int().optional(),
-        height: z.number().int().optional(),
-        seed: z.number().int().optional(),
+        payment_signature: z
+          .string()
+          .describe(
+            "Signature of the Solana tx that (a) SPL-transferred the quoted USDC amount to the server's ATA and (b) attached a memo equal to payment_id.",
+          ),
       },
     },
     async (input) => {
-      const providers = await fetchProviders();
-      const provider = providers.find((p) => p.pda === input.provider_pda);
-      if (!provider) return errorContent(`unknown provider ${input.provider_pda}`);
-      if (!provider.online) return errorContent(`provider is offline`);
-
-      const maxPriceUsdcBase = BigInt(
-        Math.round(input.max_price_usdc * 10 ** USDC_DECIMALS),
-      );
-      const quotedPrice = provider.suggestedPriceUsdcBase ?? 1_000n;
-      if (quotedPrice > maxPriceUsdcBase) {
+      pruneExpiredQuotes();
+      const quote = quoteStore.get(input.payment_id);
+      if (!quote) {
         return errorContent(
-          `provider's suggested price ${formatUsdc(quotedPrice)} USDC exceeds your max_price_usdc ${input.max_price_usdc}`,
+          `unknown or expired payment_id ${input.payment_id}. Call quote_inference again.`,
+        );
+      }
+      // One-shot use — remove now to prevent double-spend even if the
+      // verification path throws later.
+      quoteStore.delete(input.payment_id);
+
+      const recipientAta = await getServerUsdcAta();
+      const verifyResult = await verifyPayment({
+        paymentSignature: input.payment_signature as Signature,
+        expectedRecipientAta: recipientAta,
+        expectedAmountBase: quote.priceUsdcBase,
+        expectedMemo: input.payment_id,
+      });
+      if (!verifyResult.ok) {
+        return errorContent(`payment verification failed: ${verifyResult.reason}`);
+      }
+
+      // Payment verified — execute the actual on-chain submission.
+      // The agent paid the server; the server now pays escrow.
+      await postSpec(quote.spec);
+
+      const wallet = await getServerWallet();
+      let job;
+      try {
+        job = await createJobAsServer({
+          serverSigner: wallet.signer,
+          providerPda: quote.providerPda,
+          spec: quote.spec,
+          priceLamportsUsdc: quote.priceUsdcBase,
+        });
+      } catch (err) {
+        // create_job failed AFTER the agent paid. This is a refund
+        // situation. For hackathon scope, surface the error + the
+        // agent's payment signature so it can be tracked manually.
+        // Phase 2 needs an automated refund path.
+        return errorContent(
+          `create_job failed after payment verified: ${
+            err instanceof Error ? err.message : err
+          }. Your payment tx ${input.payment_signature} is recoverable — contact the operator.`,
         );
       }
 
-      const spec = buildSpec(input.prompt, {
-        width: input.width ?? 1024,
-        height: input.height ?? 1024,
-        ...(input.seed != null ? { seed: input.seed } : {}),
-      });
-      await postSpec(spec);
-
-      const wallet = await getServerWallet();
-      const job = await createJobAsServer({
-        serverSigner: wallet.signer,
-        providerPda: provider.pda,
-        spec,
-        priceLamportsUsdc: quotedPrice,
-      });
-
       pendingJobs.set(job.jobPda, {
-        providerPda: provider.pda,
+        providerPda: quote.providerPda,
         submittedAt: Date.now(),
       });
 
@@ -261,8 +344,9 @@ export function buildMcpServer(): McpServer {
                 job_pda: job.jobPda,
                 create_job_signature: job.signature,
                 explorer_url: explorerTxUrl(job.signature),
-                price_paid_usdc_base: quotedPrice.toString(),
-                price_paid_usdc: formatUsdc(quotedPrice),
+                price_paid_usdc_base: quote.priceUsdcBase.toString(),
+                price_paid_usdc: formatUsdc(quote.priceUsdcBase),
+                payment_payer: verifyResult.payerAddress,
                 spec_hash_hex: Array.from(job.specHash, (b) =>
                   b.toString(16).padStart(2, "0"),
                 ).join(""),
