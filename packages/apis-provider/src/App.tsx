@@ -28,6 +28,15 @@ import {
   type Settings,
 } from "./lib/settings";
 import { useGpuStatus, type GpuStatus } from "./lib/gpu-monitor";
+import {
+  detectHardware,
+  loadLastBenchmark,
+  runBenchmark,
+  saveLastBenchmark,
+  suggestedPrices,
+  type BenchmarkResult,
+  type HardwareInfo,
+} from "./lib/benchmark";
 import { Onboarding } from "./components/Onboarding";
 import {
   buildTimeline,
@@ -108,6 +117,19 @@ function App() {
   // over the last minute on the JS side.
   const gpuStatus = useGpuStatus();
 
+  // Hardware + benchmark — detected once on mount, run on demand. The
+  // last benchmark persists across launches so the user doesn't pay
+  // the 5-15s generation cost just to glance at the suggested-price.
+  const [hardware, setHardware] = useState<HardwareInfo | null>(null);
+  const [lastBenchmark, setLastBenchmark] = useState<BenchmarkResult | null>(
+    null,
+  );
+  const [benchmarkState, setBenchmarkState] = useState<
+    | { kind: "idle" }
+    | { kind: "running"; startedAt: number }
+    | { kind: "error"; message: string }
+  >({ kind: "idle" });
+
   // Settings: loaded on mount, edited in the drawer, saved via the
   // Tauri Store plugin (writes JSON to the app's local data dir).
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
@@ -117,17 +139,21 @@ function App() {
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      const [s, onboarded, h, ap] = await Promise.all([
+      const [s, onboarded, h, ap, hw, lb] = await Promise.all([
         loadSettings(),
         hasOnboarded(),
         loadHistory(),
         loadAutoPause(),
+        detectHardware(),
+        loadLastBenchmark(),
       ]);
       if (cancelled) return;
       setSettings(s);
       setShowOnboarding(!onboarded);
       setHistory(h);
       setAutoPause(ap);
+      setHardware(hw);
+      setLastBenchmark(lb);
       // Seed the dedup set so we don't re-persist what's already on disk.
       for (const e of h) persistedPdas.current.add(e.shortPda);
     })();
@@ -135,6 +161,33 @@ function App() {
       cancelled = true;
     };
   }, []);
+
+  // Handler: kick off a benchmark. The mflux subprocess is long-lived
+  // (5-15 s for a 1024×1024 generation, plus model-load on first run)
+  // so we don't await it eagerly in the click handler — let the button
+  // disable + the running state carry the UX.
+  const handleRunBenchmark = useCallback(
+    async (quick: boolean) => {
+      if (benchmarkState.kind === "running") return;
+      setBenchmarkState({ kind: "running", startedAt: Date.now() });
+      try {
+        const result = await runBenchmark({
+          pythonPath: settings.pythonPath || null,
+          workingDir: settings.workingDir || null,
+          quick,
+        });
+        await saveLastBenchmark(result);
+        setLastBenchmark(result);
+        setBenchmarkState({ kind: "idle" });
+      } catch (err) {
+        setBenchmarkState({
+          kind: "error",
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    },
+    [benchmarkState.kind, settings.pythonPath, settings.workingDir],
+  );
 
   // Wall-clock tick for the 24h bucket + the "Xm ago" labels. 30 s
   // resolution is enough — earnings totals don't change between ticks,
@@ -466,6 +519,13 @@ function App() {
             onRegister={handleRegister}
           />
           <EarningsCard earnings={earnings} />
+          <BenchmarkCard
+            hardware={hardware}
+            lastBenchmark={lastBenchmark}
+            state={benchmarkState}
+            onRun={handleRunBenchmark}
+            nowMs={nowMs}
+          />
           <GpuCard
             gpuStatus={gpuStatus}
             autoPause={autoPause}
@@ -891,6 +951,158 @@ function EarningsCard({
         <span className="kv-label">Pending (escrow)</span>
         <span className="kv-value violet">{formatUsdcBase(earnings.pending)} USDC</span>
       </div>
+    </div>
+  );
+}
+
+// ── Benchmark card (Sprint 2.10) ─────────────────────────────────────
+
+function BenchmarkCard({
+  hardware,
+  lastBenchmark,
+  state,
+  onRun,
+  nowMs,
+}: {
+  hardware: HardwareInfo | null;
+  lastBenchmark: BenchmarkResult | null;
+  state:
+    | { kind: "idle" }
+    | { kind: "running"; startedAt: number }
+    | { kind: "error"; message: string };
+  onRun: (quick: boolean) => void;
+  nowMs: number;
+}) {
+  const running = state.kind === "running";
+  const elapsed =
+    state.kind === "running"
+      ? Math.max(0, Math.floor((nowMs - state.startedAt) / 1000))
+      : 0;
+  return (
+    <div className="card">
+      <h3>
+        <span>Benchmark</span>
+        {hardware && hardware.chip && (
+          <span className="count">{hardware.chip}</span>
+        )}
+      </h3>
+
+      {hardware && !hardware.fluxSupported && hardware.ramGb > 0 && (
+        <p className="provider-hint error">
+          Only {hardware.ramGb} GB RAM detected. FLUX.1-schnell wants
+          ≥16 GB unified memory. Benchmark + worker may OOM.
+        </p>
+      )}
+
+      {lastBenchmark ? (
+        <BenchmarkSummary result={lastBenchmark} nowMs={nowMs} />
+      ) : (
+        <p className="provider-hint">
+          Generate one image to measure how fast your hardware runs Flux
+          Schnell. Result feeds the suggested per-job price below.
+        </p>
+      )}
+
+      <div className="benchmark-actions">
+        <button
+          type="button"
+          className="benchmark-run"
+          onClick={() => onRun(false)}
+          disabled={running}
+        >
+          {lastBenchmark ? "Re-run (1024)" : "Run benchmark (1024)"}
+        </button>
+        <button
+          type="button"
+          className="benchmark-run secondary"
+          onClick={() => onRun(true)}
+          disabled={running}
+        >
+          Quick (512)
+        </button>
+      </div>
+
+      {running && (
+        <p className="provider-hint">
+          Generating… {elapsed}s elapsed. First run after install also
+          downloads ~12 GB from HuggingFace, which can take several
+          minutes.
+        </p>
+      )}
+      {state.kind === "error" && (
+        <p className="provider-hint error">Benchmark failed: {state.message}</p>
+      )}
+    </div>
+  );
+}
+
+function BenchmarkSummary({
+  result,
+  nowMs,
+}: {
+  result: BenchmarkResult;
+  nowMs: number;
+}) {
+  const jobsPerHour = result.secondsPerImage > 0
+    ? Math.round(3600 / result.secondsPerImage)
+    : 0;
+  const prices = suggestedPrices(result.secondsPerImage);
+  return (
+    <>
+      <div className="kv-row">
+        <span className="kv-label">Speed</span>
+        <span className="kv-value green">
+          {result.secondsPerImage.toFixed(2)}s / image
+        </span>
+      </div>
+      <div className="kv-row">
+        <span className="kv-label">Throughput</span>
+        <span className="kv-value">{jobsPerHour} images/hr</span>
+      </div>
+      <div className="kv-row">
+        <span className="kv-label">Last run</span>
+        <span className="kv-value dim">
+          {formatRelativeTime(result.ranAt, nowMs)} · {result.width}×
+          {result.height} · {result.quantize}-bit
+        </span>
+      </div>
+      <div className="benchmark-prices">
+        <PriceTier label="$0.50/hr" priceUsdcBase={prices.cheap} accent="dim" />
+        <PriceTier
+          label="$1.00/hr"
+          priceUsdcBase={prices.fair}
+          accent="green"
+        />
+        <PriceTier
+          label="$2.00/hr"
+          priceUsdcBase={prices.premium}
+          accent="violet"
+        />
+      </div>
+      <p className="provider-hint">
+        Suggested per-job prices at three hourly rates. Buyers set the
+        actual price today (W1 marketplace); these are calibration
+        targets for when provider-set minimums land.
+      </p>
+    </>
+  );
+}
+
+function PriceTier({
+  label,
+  priceUsdcBase,
+  accent,
+}: {
+  label: string;
+  priceUsdcBase: bigint;
+  accent: "dim" | "green" | "violet";
+}) {
+  return (
+    <div className="benchmark-price-tier">
+      <span className="benchmark-price-label">{label}</span>
+      <span className={`benchmark-price-value ${accent}`}>
+        {formatUsdcBase(priceUsdcBase)} USDC
+      </span>
     </div>
   );
 }
