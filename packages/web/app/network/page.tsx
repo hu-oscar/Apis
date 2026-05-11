@@ -253,14 +253,12 @@ function ProviderCard({ provider }: { provider: ProviderRow }) {
           {knownLabel && (
             <p className="text-sm font-semibold text-[#14F195]">{knownLabel}</p>
           )}
-          <a
-            href={explorerAccountUrl(provider.pda)}
-            target="_blank"
-            rel="noreferrer"
+          <Link
+            href={`/provider/${provider.pda}`}
             className="font-mono text-xs text-white/60 underline-offset-2 hover:text-[#14F195] hover:underline"
           >
             {provider.pda}
-          </a>
+          </Link>
         </div>
         <StatusBadge label={statusName} active={isActive} />
       </div>
