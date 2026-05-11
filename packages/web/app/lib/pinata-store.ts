@@ -28,7 +28,15 @@ const PINATA_UPLOAD_URL = "https://uploads.pinata.cloud/v3/files";
 const PINATA_GATEWAY = "https://gateway.pinata.cloud/ipfs";
 
 function jwt(): string | null {
-  return process.env.PINATA_JWT ?? null;
+  // Defensive trim — copy-pasting JWTs into Vercel's env-var input
+  // sometimes drags a trailing newline, which then breaks
+  // Headers.append("Authorization", `Bearer ${jwt}`) with
+  // `TypeError: invalid newline character`. The JWT itself never
+  // contains whitespace, so trimming is always safe.
+  const raw = process.env.PINATA_JWT;
+  if (!raw) return null;
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : null;
 }
 
 /**
