@@ -2,29 +2,28 @@
   "name": "@apis/mcp",
   "version": "0.1.0",
   "private": true,
-  "description": "Apis MCP + x402 server — exposes compute marketplace tools to AI agents",
+  "description": "Apis MCP server — exposes the compute marketplace to AI agents over MCP (Streamable HTTP). x402 paywall lands in Sprint 4.4.",
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
-    "start": "node dist/index.js",
-    "test": "vitest",
-    "lint": "eslint .",
-    "typecheck": "tsc --noEmit"
+    "start": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "echo \"mcp: no tests yet\" && exit 0"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.95.1",
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "@solana/spl-token": "^0.4.14",
-    "@solana/web3.js": "^1.98.4",
-    "hono": "^4.12.18",
+    "@solana/kit": "^6.9.0",
+    "@solana/program-client-core": "^6.9.0",
+    "@solana-program/token": "^0.13.0",
+    "express": "^4.21.2",
     "pino": "^10.3.1",
-    "zod": "^4.4.3"
+    "zod": "^3.23.0"
   },
   "devDependencies": {
-    "@types/node": "^25.6.2",
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.10.5",
     "tsx": "^4.21.0",
-    "typescript": "^6.0.3",
-    "vitest": "^4.1.5"
+    "typescript": "~5.8.3"
   }
 }
