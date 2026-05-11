@@ -52,6 +52,25 @@ export async function markOnboarded(): Promise<void> {
   await store.save();
 }
 
+// ── Auto-pause on GPU contention (Sprint 2.9) ──────────────────────
+//
+// Kept as a separate top-level key (not part of Settings) because the
+// value is a boolean, not a string env var. The worker subprocess
+// doesn't care about this flag — only the React layer's auto-pause
+// policy does — so there's no point shoehorning it into the env tuple.
+
+const AUTO_PAUSE_KEY = "autoPauseOnGpuContention";
+
+export async function loadAutoPause(): Promise<boolean> {
+  const v = await store.get<boolean>(AUTO_PAUSE_KEY);
+  return v === true;
+}
+
+export async function saveAutoPause(value: boolean): Promise<void> {
+  await store.set(AUTO_PAUSE_KEY, value);
+  await store.save();
+}
+
 const store = new LazyStore(STORE_FILE);
 
 export async function loadSettings(): Promise<Settings> {

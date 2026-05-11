@@ -19,12 +19,15 @@ import "./App.css";
 import {
   DEFAULT_SETTINGS,
   hasOnboarded,
+  loadAutoPause,
   loadSettings,
   markOnboarded,
+  saveAutoPause,
   saveSettings,
   settingsToWorkerEnv,
   type Settings,
 } from "./lib/settings";
+import { useGpuStatus, type GpuStatus } from "./lib/gpu-monitor";
 import { Onboarding } from "./components/Onboarding";
 import {
   buildTimeline,
@@ -92,6 +95,19 @@ function App() {
   // re-renders on every animation frame.
   const [nowMs, setNowMs] = useState<number>(() => Date.now());
 
+  // Auto-pause: opt-in policy that stops the worker when another GPU-
+  // heavy app pushes the device above the pause threshold. Stored as
+  // a separate Tauri Store key from the rest of Settings because the
+  // value is boolean, not a string env var.
+  const [autoPause, setAutoPause] = useState(false);
+  // Sticky flag: true while we (the autoPause policy) are the reason
+  // the worker is offline. Reset by any explicit user toggle.
+  const [autoPausedByGpu, setAutoPausedByGpu] = useState(false);
+
+  // Live GPU utilization — sampled at 5 s from `ioreg` and averaged
+  // over the last minute on the JS side.
+  const gpuStatus = useGpuStatus();
+
   // Settings: loaded on mount, edited in the drawer, saved via the
   // Tauri Store plugin (writes JSON to the app's local data dir).
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
@@ -101,15 +117,17 @@ function App() {
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      const [s, onboarded, h] = await Promise.all([
+      const [s, onboarded, h, ap] = await Promise.all([
         loadSettings(),
         hasOnboarded(),
         loadHistory(),
+        loadAutoPause(),
       ]);
       if (cancelled) return;
       setSettings(s);
       setShowOnboarding(!onboarded);
       setHistory(h);
+      setAutoPause(ap);
       // Seed the dedup set so we don't re-persist what's already on disk.
       for (const e of h) persistedPdas.current.add(e.shortPda);
     })();
@@ -290,6 +308,82 @@ function App() {
     [history, inFlightPrices, nowMs],
   );
 
+  // Toggle the auto-pause feature. Flipping it off also clears the
+  // "we were the one who paused" flag — otherwise re-enabling the
+  // feature later would resume a worker the user had stopped on
+  // purpose.
+  const handleToggleAutoPause = useCallback(async () => {
+    const next = !autoPause;
+    setAutoPause(next);
+    if (!next) setAutoPausedByGpu(false);
+    try {
+      await saveAutoPause(next);
+    } catch {
+      /* best-effort — UI state is already updated */
+    }
+  }, [autoPause]);
+
+  // Auto-pause policy. Two thresholds form a hysteresis band so the
+  // worker doesn't bounce up/down at the boundary:
+  //   - PAUSE_AT %  → stop if we're online + no job in flight
+  //   - RESUME_AT % → start again if we paused earlier
+  // "Job in flight" is the critical guard: dropping mid-pipeline
+  // loses the bond (W4) and disappoints the buyer. Only pause
+  // between jobs.
+  useEffect(() => {
+    if (!autoPause) return;
+    const avg = gpuStatus.average;
+    if (avg === null) return;
+    if (busy) return; // a toggle is in flight; let it land first
+
+    const PAUSE_AT = 50;
+    const RESUME_AT = 25;
+    const hasActiveJob = timeline.some(
+      (j) => j.phase !== "completed" && j.phase !== "failed",
+    );
+
+    if (online && !hasActiveJob && avg > PAUSE_AT) {
+      void (async () => {
+        try {
+          await invoke("stop_worker");
+          setOnline(false);
+          setAutoPausedByGpu(true);
+          void setTrayState("paused");
+        } catch {
+          /* swallow — retry on next sample */
+        }
+      })();
+      return;
+    }
+
+    if (!online && autoPausedByGpu && avg < RESUME_AT) {
+      void (async () => {
+        try {
+          await invoke("start_worker", {
+            config: {
+              python_path: settings.pythonPath || null,
+              working_dir: settings.workingDir || null,
+              env: settingsToWorkerEnv(settings),
+            },
+          });
+          setOnline(true);
+          setAutoPausedByGpu(false);
+          void setTrayState("active");
+        } catch {
+          /* swallow — retry on next sample */
+        }
+      })();
+    }
+  }, [
+    gpuStatus.average,
+    autoPause,
+    autoPausedByGpu,
+    online,
+    busy,
+    timeline,
+    settings,
+  ]);
+
   // Reconcile UI state with actual worker state every 5 s. Also
   // mirrors the live status to the menu-bar tray so a glance is
   // enough to know whether jobs are still being served — even when
@@ -318,6 +412,10 @@ function App() {
     if (busy) return;
     setBusy(true);
     setError(null);
+    // The user's explicit choice always trumps the auto-pause policy:
+    // clear the sticky flag so the policy doesn't immediately undo
+    // whatever they just did.
+    setAutoPausedByGpu(false);
     try {
       if (online) {
         await invoke("stop_worker");
@@ -368,6 +466,12 @@ function App() {
             onRegister={handleRegister}
           />
           <EarningsCard earnings={earnings} />
+          <GpuCard
+            gpuStatus={gpuStatus}
+            autoPause={autoPause}
+            autoPausedByGpu={autoPausedByGpu}
+            onToggleAutoPause={handleToggleAutoPause}
+          />
           <JobHistoryCard history={history} nowMs={nowMs} />
           <NetworkCard apiBase={settings.apisApiBase} />
         </aside>
@@ -787,6 +891,70 @@ function EarningsCard({
         <span className="kv-label">Pending (escrow)</span>
         <span className="kv-value violet">{formatUsdcBase(earnings.pending)} USDC</span>
       </div>
+    </div>
+  );
+}
+
+// ── GPU contention card (Sprint 2.9) ─────────────────────────────────
+
+function GpuCard({
+  gpuStatus,
+  autoPause,
+  autoPausedByGpu,
+  onToggleAutoPause,
+}: {
+  gpuStatus: GpuStatus;
+  autoPause: boolean;
+  autoPausedByGpu: boolean;
+  onToggleAutoPause: () => void;
+}) {
+  const current = gpuStatus.current;
+  const avg = gpuStatus.average;
+  const unavailable = current === null && avg === null;
+  return (
+    <div className="card">
+      <h3>
+        <span>GPU</span>
+        {current !== null && <span className="count">{current}% now</span>}
+      </h3>
+      {unavailable ? (
+        <p className="provider-hint">
+          GPU utilization unavailable on this machine (Apple Silicon
+          required for `ioreg` IOAccelerator stats).
+        </p>
+      ) : (
+        <>
+          <div className="kv-row">
+            <span className="kv-label">1-min avg</span>
+            <span
+              className={
+                avg !== null && avg > 50
+                  ? "kv-value violet"
+                  : avg !== null && avg < 25
+                    ? "kv-value green"
+                    : "kv-value"
+              }
+            >
+              {avg === null ? "—" : `${avg}%`}
+            </span>
+          </div>
+          <label className="gpu-toggle">
+            <input
+              type="checkbox"
+              checked={autoPause}
+              onChange={onToggleAutoPause}
+            />
+            <span>Auto-pause when busy</span>
+          </label>
+          {autoPause && (
+            <p className="provider-hint">
+              {autoPausedByGpu
+                ? "Paused — another app is using the GPU. Will resume when 1-min avg drops below 25%."
+                : "Will pause if 1-min avg climbs above 50% (only between jobs — a running pipeline always finishes)."}
+            </p>
+          )}
+        </>
+      )}
     </div>
   );
 }

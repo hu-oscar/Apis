@@ -746,6 +746,47 @@ body,
   background: var(--warn-red);
 }
 
+/* ── GPU contention toggle (Sprint 2.9) ──────────────────────────── */
+
+.gpu-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg);
+  cursor: pointer;
+  user-select: none;
+}
+
+.gpu-toggle input[type="checkbox"] {
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  border: 1px solid var(--white-40);
+  background: rgba(0, 0, 0, 0.6);
+  display: inline-grid;
+  place-content: center;
+  cursor: pointer;
+  transition: 120ms ease;
+}
+
+.gpu-toggle input[type="checkbox"]:checked {
+  background: var(--solana-green);
+  border-color: var(--solana-green);
+}
+
+.gpu-toggle input[type="checkbox"]:checked::after {
+  content: "";
+  width: 4px;
+  height: 8px;
+  border: solid #000;
+  border-width: 0 1.5px 1.5px 0;
+  transform: translateY(-1px) rotate(45deg);
+}
+
 /* ── Job history (persisted last-10 panel, Sprint 2.8) ───────────── */
 
 .history-list {
