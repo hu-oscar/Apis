@@ -37,6 +37,7 @@ import { WORKER_PROVIDER_PDA, formatUsdc } from "@/app/lib/constants";
 import { ApisLogo } from "@/app/components/ui/apis-logo";
 import {
   fetchHeartbeat,
+  type HeartbeatRecord,
   type HeartbeatStatus,
 } from "@/app/lib/heartbeat-client";
 
@@ -317,6 +318,8 @@ function ProviderBody({
         )}
       </Card>
 
+      <HardwareCard heartbeat={heartbeat} />
+
       <section className="space-y-3">
         <div className="flex items-baseline justify-between border-b border-white/10 pb-3">
           <h2 className="text-2xl font-semibold tracking-tight">
@@ -428,6 +431,154 @@ function formatDuration(ms: number): string {
   if (h < 48) return `${h}h`;
   const d = Math.round(h / 24);
   return `${d}d`;
+}
+
+// ── Hardware + throughput card (Sprint 3.1b) ────────────────────────
+//
+// Surfaces the desktop-published fields the worker carries in its
+// signed heartbeat: chip, RAM, CPU cores, capacity (max concurrent
+// jobs), most-recent Flux Schnell benchmark, and the provider's
+// self-suggested per-job price. When the provider has never sent a
+// heartbeat the card collapses to a short hint; when the heartbeat is
+// stale we still show the last-known values with a "from N min ago"
+// label, since the hardware shape doesn't change between restarts.
+
+function HardwareCard({ heartbeat }: { heartbeat: HeartbeatStatus }) {
+  const record =
+    heartbeat.kind === "online"
+      ? heartbeat.record
+      : heartbeat.kind === "offline"
+        ? heartbeat.lastSeen
+        : null;
+
+  if (!record) {
+    return (
+      <Card>
+        <SectionTitle>Hardware & throughput</SectionTitle>
+        <p className="font-mono text-xs text-white/45">
+          No heartbeat received yet — this provider hasn't reported its
+          hardware. Cards refresh every 30 s once the worker comes online.
+        </p>
+      </Card>
+    );
+  }
+
+  const hasHardware = record.chip || record.ramGb > 0 || record.cpuCores > 0;
+  const seconds =
+    record.secondsPerImage != null
+      ? parseFloat(record.secondsPerImage)
+      : null;
+  const jobsPerHour =
+    seconds && seconds > 0 ? Math.round(3600 / seconds) : null;
+  const suggested =
+    record.suggestedPriceUsdcBase != null
+      ? safeBigint(record.suggestedPriceUsdcBase)
+      : null;
+
+  const ageHint =
+    heartbeat.kind === "online"
+      ? "live"
+      : heartbeat.kind === "offline" && heartbeat.ageMs != null
+        ? `from ${formatDuration(heartbeat.ageMs)} ago`
+        : "stale";
+
+  return (
+    <Card>
+      <div className="flex flex-wrap items-baseline justify-between gap-3">
+        <SectionTitle>Hardware & throughput</SectionTitle>
+        <span className="font-mono text-[10px] uppercase tracking-wider text-white/40">
+          worker v{record.version} · {ageHint}
+        </span>
+      </div>
+
+      {!hasHardware ? (
+        <p className="font-mono text-xs text-white/45">
+          Worker is running standalone — no desktop app to publish chip /
+          RAM details. The provider can still accept jobs; you just won't
+          see machine info here.
+        </p>
+      ) : (
+        <div className="grid grid-cols-2 gap-3 text-xs md:grid-cols-4">
+          {record.chip && (
+            <HardwareCell label="Chip" value={record.chip} accent="green" />
+          )}
+          {record.ramGb > 0 && (
+            <HardwareCell label="Memory" value={`${record.ramGb} GB`} />
+          )}
+          {record.cpuCores > 0 && (
+            <HardwareCell
+              label="CPU cores"
+              value={record.cpuCores.toString()}
+            />
+          )}
+          <HardwareCell
+            label="Concurrent jobs"
+            value={record.capacity.toString()}
+          />
+        </div>
+      )}
+
+      {(seconds !== null || suggested !== null) && (
+        <div className="grid grid-cols-2 gap-3 border-t border-white/5 pt-4 text-xs md:grid-cols-3">
+          {seconds !== null && (
+            <HardwareCell
+              label="Flux Schnell"
+              value={`${seconds.toFixed(2)}s / image`}
+              accent="violet"
+            />
+          )}
+          {jobsPerHour !== null && (
+            <HardwareCell
+              label="Throughput"
+              value={`~${jobsPerHour} images/hr`}
+            />
+          )}
+          {suggested !== null && (
+            <HardwareCell
+              label="Suggested price"
+              value={`${formatUsdc(suggested)} USDC`}
+              accent="green"
+            />
+          )}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function HardwareCell({
+  label,
+  value,
+  accent,
+}: {
+  label: string;
+  value: string;
+  accent?: "green" | "violet";
+}) {
+  const colorClass =
+    accent === "green"
+      ? "text-[#14F195]"
+      : accent === "violet"
+        ? "text-[#9945FF]"
+        : "text-white/85";
+  return (
+    <div className="space-y-1">
+      <p className="font-mono text-[10px] uppercase tracking-wider text-white/40">
+        {label}
+      </p>
+      <p className={`font-mono text-sm ${colorClass}`}>{value}</p>
+    </div>
+  );
+}
+
+/** Defensive bigint parser — the heartbeat field is a string from KV
+ *  so a malformed entry shouldn't crash the page. */
+function safeBigint(s: string): bigint | null {
+  try {
+    return BigInt(s);
+  } catch {
+    return null;
+  }
 }
 
 function StatusBadge({ label, active }: { label: string; active: boolean }) {

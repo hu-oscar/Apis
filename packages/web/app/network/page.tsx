@@ -31,6 +31,11 @@ import { JobStatus } from "@/app/lib/generated/apis-program/src/generated/types/
 import { explorerAccountUrl } from "@/app/lib/apis";
 import { WORKER_PROVIDER_PDA, formatUsdc } from "@/app/lib/constants";
 import { ApisLogo } from "@/app/components/ui/apis-logo";
+import {
+  fetchHeartbeat,
+  type HeartbeatRecord,
+  type HeartbeatStatus,
+} from "@/app/lib/heartbeat-client";
 
 type ProviderRow = {
   pda: Address;
@@ -38,6 +43,11 @@ type ProviderRow = {
   activeJobs: number;
   totalJobs: number;
   status: ProviderStatus;
+  /** Liveness + enriched hardware/benchmark fields from the worker's
+   *  signed heartbeat. `null` when the fetch failed or hadn't returned
+   *  yet — distinct from `{kind: "offline", lastSeen: null}` which
+   *  means "fetched but never heartbeated." */
+  heartbeat: HeartbeatStatus | null;
 };
 
 type JobRow = {
@@ -138,7 +148,28 @@ export default function NetworkPage() {
             activeJobs: Number(decoded.activeJobs),
             totalJobs: Number(decoded.totalJobs),
             status: decoded.status,
+            heartbeat: null,
           };
+        });
+
+        // Fetch heartbeats in parallel for every provider so cards
+        // can show hardware + speed. At MVP scale (≤20 providers)
+        // this is one HTTP call per provider ≈ 200ms total over the
+        // existing /api/heartbeat/[pda] route. For larger directories
+        // we'd batch via a single /api/heartbeat?pdas=… route.
+        const heartbeats = await Promise.all(
+          providers.map((p) =>
+            fetchHeartbeat(p.pda).catch(
+              (err): HeartbeatStatus => ({
+                kind: "error",
+                message: err instanceof Error ? err.message : String(err),
+              }),
+            ),
+          ),
+        );
+        if (cancelled) return;
+        providers.forEach((p, i) => {
+          p.heartbeat = heartbeats[i];
         });
 
         const jobs: JobRow[] = jobAccts.map((a) => {
@@ -240,6 +271,20 @@ function ProviderCard({ provider }: { provider: ProviderRow }) {
   const knownLabel = KNOWN_PROVIDERS[provider.pda];
   const statusName = providerStatusName(provider.status);
   const isActive = provider.status === ProviderStatus.Active;
+  const record = heartbeatRecord(provider.heartbeat);
+  const online = provider.heartbeat?.kind === "online";
+  // Prefer the live chip string from the heartbeat (provider-published)
+  // over the hardcoded `KNOWN_PROVIDERS` map — the heartbeat is what we
+  // want to surface for any future provider that registers.
+  const displayLabel = record?.chip || knownLabel || null;
+  const seconds =
+    record?.secondsPerImage != null
+      ? parseFloat(record.secondsPerImage)
+      : null;
+  const suggested =
+    record?.suggestedPriceUsdcBase != null
+      ? safeBigint(record.suggestedPriceUsdcBase)
+      : null;
 
   return (
     <motion.div
@@ -250,8 +295,15 @@ function ProviderCard({ provider }: { provider: ProviderRow }) {
     >
       <div className="flex flex-wrap items-baseline justify-between gap-3">
         <div className="space-y-1">
-          {knownLabel && (
-            <p className="text-sm font-semibold text-[#14F195]">{knownLabel}</p>
+          {displayLabel && (
+            <p className="text-sm font-semibold text-[#14F195]">
+              {displayLabel}
+              {record && record.ramGb > 0 && (
+                <span className="ml-2 font-mono text-xs font-normal text-white/55">
+                  · {record.ramGb} GB
+                </span>
+              )}
+            </p>
           )}
           <Link
             href={`/provider/${provider.pda}`}
@@ -260,24 +312,35 @@ function ProviderCard({ provider }: { provider: ProviderRow }) {
             {provider.pda}
           </Link>
         </div>
-        <StatusBadge label={statusName} active={isActive} />
+        <div className="flex items-center gap-2">
+          <LivenessDot online={online} />
+          <StatusBadge label={statusName} active={isActive} />
+        </div>
       </div>
-      <div className="grid grid-cols-2 gap-4 text-xs md:grid-cols-3">
-        <Cell label="Authority">
-          <a
-            href={explorerAccountUrl(provider.authority)}
-            target="_blank"
-            rel="noreferrer"
-            className="font-mono text-white/70 hover:text-[#14F195]"
-          >
-            {provider.authority.slice(0, 6)}…{provider.authority.slice(-4)}
-          </a>
-        </Cell>
+      <div className="grid grid-cols-2 gap-4 text-xs md:grid-cols-4">
         <Cell label="Active jobs">
           <span className="font-mono text-white/85">{provider.activeJobs}</span>
         </Cell>
         <Cell label="Total served">
           <span className="font-mono text-white/85">{provider.totalJobs}</span>
+        </Cell>
+        <Cell label="Speed">
+          {seconds !== null ? (
+            <span className="font-mono text-[#9945FF]">
+              {seconds.toFixed(2)}s / img
+            </span>
+          ) : (
+            <span className="font-mono text-white/40">—</span>
+          )}
+        </Cell>
+        <Cell label="Suggested">
+          {suggested !== null ? (
+            <span className="font-mono text-[#14F195]">
+              {formatUsdc(suggested)} USDC
+            </span>
+          ) : (
+            <span className="font-mono text-white/40">—</span>
+          )}
         </Cell>
       </div>
       <div className="flex justify-end pt-1">
@@ -293,6 +356,37 @@ function ProviderCard({ provider }: { provider: ProviderRow }) {
         </Link>
       </div>
     </motion.div>
+  );
+}
+
+/** Extract the heartbeat record from the union — online has it
+ *  directly, offline-with-history has `lastSeen`, otherwise null. */
+function heartbeatRecord(hb: HeartbeatStatus | null): HeartbeatRecord | null {
+  if (!hb) return null;
+  if (hb.kind === "online") return hb.record;
+  if (hb.kind === "offline") return hb.lastSeen;
+  return null;
+}
+
+function safeBigint(s: string): bigint | null {
+  try {
+    return BigInt(s);
+  } catch {
+    return null;
+  }
+}
+
+function LivenessDot({ online }: { online: boolean }) {
+  return online ? (
+    <span
+      className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#14F195] shadow-[0_0_8px_rgba(20,241,149,0.8)]"
+      title="online — heartbeat in the last 90s"
+    />
+  ) : (
+    <span
+      className="h-1.5 w-1.5 rounded-full bg-white/25"
+      title="offline — no recent heartbeat"
+    />
   );
 }
 
