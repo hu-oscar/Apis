@@ -31,7 +31,7 @@ import { useSolanaClient } from "@solana/react-hooks";
 import { formatUsdc } from "@/app/lib/constants";
 import { explorerAccountUrl } from "@/app/lib/apis";
 import { loadHistory, type JobHistoryEntry } from "@/app/lib/job-history";
-import { ApisLogo } from "@/app/components/ui/apis-logo";
+import { NavBar } from "@/app/components/ui/navbar";
 
 type HistoryRow = JobHistoryEntry & {
   /** On-chain status if the Job account still exists; null when the
@@ -57,6 +57,8 @@ export default function HistoryPage() {
   const client = useSolanaClient();
   const buyer = wallet?.account.address ?? null;
   const [state, setState] = useState<State>({ kind: "loading" });
+  // Manual-retry trigger — bumped by the error-state retry button.
+  const [retryNonce, setRetryNonce] = useState(0);
 
   useEffect(() => {
     if (!buyer) {
@@ -122,14 +124,14 @@ export default function HistoryPage() {
       cancelled = true;
       clearInterval(id);
     };
-  }, [buyer, client]);
+  }, [buyer, client, retryNonce]);
 
   return (
     <main className="relative min-h-screen overflow-x-clip bg-[#000] text-[#FAFAF9]">
       <HexGridBackground />
 
       <div className="relative z-10 mx-auto flex min-h-screen max-w-5xl flex-col px-6 py-8">
-        <Nav />
+        <NavBar active="history" />
 
         <header className="space-y-3 py-12">
           <p className="font-mono text-xs uppercase tracking-[0.22em] text-[#9945FF]">
@@ -149,9 +151,22 @@ export default function HistoryPage() {
         {state.kind === "wallet-disconnected" && <WalletGate />}
         {state.kind === "loading" && <LoadingRows n={3} />}
         {state.kind === "error" && (
-          <p className="rounded-xl border border-[#FF3B5C]/30 bg-[#FF3B5C]/[0.05] p-6 font-mono text-xs text-[#FF3B5C]">
-            Failed to load history: {state.message}
-          </p>
+          <div className="space-y-4 rounded-xl border border-[#FF3B5C]/30 bg-[#FF3B5C]/[0.05] p-6 font-mono text-xs text-[#FF3B5C]">
+            <p>
+              Failed to load history:{" "}
+              <span className="text-white/70">{state.message}</span>
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                setState({ kind: "loading" });
+                setRetryNonce((n) => n + 1);
+              }}
+              className="inline-flex items-center gap-1.5 rounded-md border border-[#FF3B5C]/40 bg-[#FF3B5C]/[0.1] px-3 py-1.5 uppercase tracking-wider text-[#FF3B5C] transition hover:bg-[#FF3B5C]/[0.18]"
+            >
+              Try again
+            </button>
+          </div>
         )}
         {state.kind === "ok" && state.rows.length === 0 && <EmptyState />}
         {state.kind === "ok" && state.rows.length > 0 && (
@@ -336,50 +351,6 @@ function LoadingRows({ n }: { n: number }) {
         />
       ))}
     </div>
-  );
-}
-
-// ─── Nav ───────────────────────────────────────────────────────────
-
-function Nav() {
-  return (
-    <nav className="flex items-center justify-between pb-8">
-      <Link href="/" className="flex items-center gap-2.5 group">
-        <ApisLogo size={26} className="transition group-hover:scale-105" />
-        <span className="font-mono text-lg font-bold tracking-tight text-[#FAFAF9] group-hover:text-[#14F195] transition">
-          apis
-        </span>
-        <span className="rounded bg-[#9945FF]/20 px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-[#9945FF]">
-          devnet
-        </span>
-      </Link>
-      <div className="flex items-center gap-4">
-        <Link
-          href="/network"
-          className="font-mono text-xs uppercase tracking-wider text-white/60 transition hover:text-[#14F195]"
-        >
-          network
-        </Link>
-        <Link
-          href="/stats"
-          className="font-mono text-xs uppercase tracking-wider text-white/60 transition hover:text-[#14F195]"
-        >
-          stats
-        </Link>
-        <Link
-          href="/history"
-          className="font-mono text-xs uppercase tracking-wider text-[#14F195]"
-        >
-          history
-        </Link>
-        <Link
-          href="/submit"
-          className="font-mono text-xs uppercase tracking-wider text-white/60 transition hover:text-[#14F195]"
-        >
-          submit
-        </Link>
-      </div>
-    </nav>
   );
 }
 

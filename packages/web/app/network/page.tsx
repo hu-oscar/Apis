@@ -30,7 +30,7 @@ import { ProviderStatus } from "@/app/lib/generated/apis-program/src/generated/t
 import { JobStatus } from "@/app/lib/generated/apis-program/src/generated/types/jobStatus";
 import { explorerAccountUrl } from "@/app/lib/apis";
 import { WORKER_PROVIDER_PDA, formatUsdc } from "@/app/lib/constants";
-import { ApisLogo } from "@/app/components/ui/apis-logo";
+import { NavBar } from "@/app/components/ui/navbar";
 import {
   fetchHeartbeat,
   type HeartbeatRecord,
@@ -209,7 +209,7 @@ export default function NetworkPage() {
       <HexGridBackground />
 
       <div className="relative z-10 mx-auto flex min-h-screen max-w-5xl flex-col px-6 py-8">
-        <Nav />
+        <NavBar active="network" />
 
         <header className="space-y-3 py-12">
           <p className="font-mono text-xs uppercase tracking-[0.22em] text-[#9945FF]">
@@ -563,48 +563,6 @@ function FooterStrip({ fetchedAt }: { fetchedAt: number | null }) {
         </span>
       </div>
     </div>
-  );
-}
-
-function Nav() {
-  return (
-    <nav className="flex items-center justify-between pb-8">
-      <Link href="/" className="flex items-center gap-2.5 group">
-        <ApisLogo size={26} className="transition group-hover:scale-105" />
-        <span className="font-mono text-lg font-bold tracking-tight text-[#FAFAF9] group-hover:text-[#14F195] transition">
-          apis
-        </span>
-        <span className="rounded bg-[#9945FF]/20 px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-[#9945FF]">
-          devnet
-        </span>
-      </Link>
-      <div className="flex items-center gap-4">
-        <Link
-          href="/network"
-          className="font-mono text-xs uppercase tracking-wider text-[#14F195]"
-        >
-          network
-        </Link>
-        <Link
-          href="/stats"
-          className="font-mono text-xs uppercase tracking-wider text-white/60 transition hover:text-[#14F195]"
-        >
-          stats
-        </Link>
-        <Link
-          href="/history"
-          className="font-mono text-xs uppercase tracking-wider text-white/60 transition hover:text-[#14F195]"
-        >
-          history
-        </Link>
-        <Link
-          href="/submit"
-          className="font-mono text-xs uppercase tracking-wider text-white/60 transition hover:text-[#14F195]"
-        >
-          submit
-        </Link>
-      </div>
-    </nav>
   );
 }
 
