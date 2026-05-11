@@ -15,6 +15,8 @@ pub fn run() {
             worker::start_worker,
             worker::stop_worker,
             worker::worker_status,
+            worker::derive_provider_pda,
+            worker::register_provider_subprocess,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -31,6 +31,25 @@ import {
   type JobState,
 } from "./lib/event-parser";
 import type { LogEntry } from "./lib/log-types";
+import {
+  ProviderStatus,
+  queryProvider,
+  type ProviderQueryResult,
+} from "./lib/provider-status";
+
+type DerivedProvider = { authority: string; pda: string };
+
+type ProviderUiState =
+  | { kind: "no-keypair" }
+  | { kind: "deriving" }
+  | { kind: "derive-error"; message: string }
+  | { kind: "querying"; derived: DerivedProvider }
+  | {
+      kind: "loaded";
+      derived: DerivedProvider;
+      onChain: ProviderQueryResult;
+      fetchedAt: number;
+    };
 
 function severityFor(entry: LogEntry): "event" | "warn" | "error" | "dim" {
   const line = entry.line;
@@ -67,6 +86,88 @@ function App() {
       cancelled = true;
     };
   }, []);
+
+  // Provider PDA: derived from the worker keypair (via Python helper)
+  // then queried on-chain. Refreshes every 30 s + on settings change.
+  const [providerUi, setProviderUi] = useState<ProviderUiState>({
+    kind: "no-keypair",
+  });
+  const [registerBusy, setRegisterBusy] = useState(false);
+
+  useEffect(() => {
+    if (!settings.workerKeypair) {
+      setProviderUi({ kind: "no-keypair" });
+      return;
+    }
+    let cancelled = false;
+
+    const sync = async () => {
+      try {
+        if (!cancelled) setProviderUi({ kind: "deriving" });
+        const derived = await invoke<DerivedProvider>("derive_provider_pda", {
+          pythonPath: settings.pythonPath || null,
+          workingDir: settings.workingDir || null,
+          keypairPath: settings.workerKeypair,
+        });
+        if (cancelled) return;
+        setProviderUi({ kind: "querying", derived });
+        const onChain = await queryProvider(derived.pda);
+        if (cancelled) return;
+        setProviderUi({
+          kind: "loaded",
+          derived,
+          onChain,
+          fetchedAt: Date.now(),
+        });
+      } catch (err) {
+        if (cancelled) return;
+        setProviderUi({
+          kind: "derive-error",
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    };
+    void sync();
+    const id = setInterval(() => void sync(), 30_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [settings.workerKeypair, settings.pythonPath, settings.workingDir]);
+
+  const handleRegister = useCallback(async () => {
+    if (registerBusy || !settings.workerKeypair) return;
+    setRegisterBusy(true);
+    try {
+      await invoke<string>("register_provider_subprocess", {
+        pythonPath: settings.pythonPath || null,
+        workingDir: settings.workingDir || null,
+        keypairPath: settings.workerKeypair,
+      });
+      // Force-refresh: bump derive→query immediately so the UI flips.
+      const derived = await invoke<DerivedProvider>("derive_provider_pda", {
+        pythonPath: settings.pythonPath || null,
+        workingDir: settings.workingDir || null,
+        keypairPath: settings.workerKeypair,
+      });
+      const onChain = await queryProvider(derived.pda);
+      setProviderUi({
+        kind: "loaded",
+        derived,
+        onChain,
+        fetchedAt: Date.now(),
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRegisterBusy(false);
+    }
+  }, [
+    registerBusy,
+    settings.workerKeypair,
+    settings.pythonPath,
+    settings.workingDir,
+  ]);
 
   // Subscribe to worker-log events.
   useEffect(() => {
@@ -164,7 +265,11 @@ function App() {
 
       <main className="main">
         <aside className="left-col">
-          <ProviderCard />
+          <ProviderCard
+            state={providerUi}
+            registerBusy={registerBusy}
+            onRegister={handleRegister}
+          />
           <EarningsCard />
           <NetworkCard apiBase={settings.apisApiBase} />
         </aside>
@@ -427,32 +532,128 @@ function Field({
 
 // ── Left-rail cards ──────────────────────────────────────────────────
 
-function ProviderCard() {
+function ProviderCard({
+  state,
+  registerBusy,
+  onRegister,
+}: {
+  state: ProviderUiState;
+  registerBusy: boolean;
+  onRegister: () => void;
+}) {
+  if (state.kind === "no-keypair") {
+    return (
+      <div className="card">
+        <h3>Provider PDA</h3>
+        <p className="provider-hint">
+          Set a worker keypair path in <strong>Settings ⚙</strong> to derive
+          your Provider PDA.
+        </p>
+      </div>
+    );
+  }
+  if (state.kind === "deriving" || state.kind === "querying") {
+    return (
+      <div className="card">
+        <h3>Provider PDA</h3>
+        <p className="provider-hint">
+          {state.kind === "deriving"
+            ? "Deriving from keypair…"
+            : "Reading on-chain state…"}
+        </p>
+      </div>
+    );
+  }
+  if (state.kind === "derive-error") {
+    return (
+      <div className="card">
+        <h3>Provider PDA</h3>
+        <p className="provider-hint error">
+          Couldn't derive: {state.message}
+        </p>
+      </div>
+    );
+  }
+
+  const { derived, onChain } = state;
   return (
     <div className="card">
       <h3>Provider PDA</h3>
       <div className="kv-row">
         <span className="kv-label">PDA</span>
-        <span className="kv-value dim">not registered</span>
+        <span className="kv-value">
+          {derived.pda.slice(0, 6)}…{derived.pda.slice(-4)}
+        </span>
       </div>
       <div className="kv-row">
         <span className="kv-label">Authority</span>
-        <span className="kv-value dim">no keypair loaded</span>
+        <span className="kv-value">
+          {derived.authority.slice(0, 6)}…{derived.authority.slice(-4)}
+        </span>
       </div>
-      <div className="kv-row">
-        <span className="kv-label">Status</span>
-        <span className="kv-value dim">—</span>
-      </div>
-      <div className="kv-row">
-        <span className="kv-label">Active jobs</span>
-        <span className="kv-value">0</span>
-      </div>
-      <div className="kv-row">
-        <span className="kv-label">Total served</span>
-        <span className="kv-value">0</span>
-      </div>
+
+      {onChain.kind === "not_registered" && (
+        <>
+          <div className="kv-row">
+            <span className="kv-label">Status</span>
+            <span className="kv-value dim">not registered</span>
+          </div>
+          <button
+            className="provider-register-btn"
+            onClick={onRegister}
+            disabled={registerBusy}
+            type="button"
+          >
+            {registerBusy ? "Registering…" : "Register provider"}
+          </button>
+          <p className="provider-hint">
+            Pays ~0.002 SOL of rent. After this, buyers can target your
+            provider for jobs.
+          </p>
+        </>
+      )}
+
+      {onChain.kind === "registered" && (
+        <>
+          <div className="kv-row">
+            <span className="kv-label">Status</span>
+            <span
+              className={
+                onChain.data.status === ProviderStatus.Active
+                  ? "kv-value green"
+                  : "kv-value dim"
+              }
+            >
+              {providerStatusLabel(onChain.data.status)}
+            </span>
+          </div>
+          <div className="kv-row">
+            <span className="kv-label">Active jobs</span>
+            <span className="kv-value">{onChain.data.activeJobs.toString()}</span>
+          </div>
+          <div className="kv-row">
+            <span className="kv-label">Total served</span>
+            <span className="kv-value">{onChain.data.totalJobs.toString()}</span>
+          </div>
+        </>
+      )}
+
+      {onChain.kind === "error" && (
+        <p className="provider-hint error">RPC error: {onChain.message}</p>
+      )}
     </div>
   );
+}
+
+function providerStatusLabel(s: ProviderStatus): string {
+  switch (s) {
+    case ProviderStatus.Active:
+      return "active";
+    case ProviderStatus.Paused:
+      return "paused";
+    case ProviderStatus.Slashed:
+      return "slashed";
+  }
 }
 
 function EarningsCard() {

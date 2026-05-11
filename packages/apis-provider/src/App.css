@@ -270,6 +270,53 @@ body,
   color: var(--white-40);
 }
 
+.provider-hint {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--white-40);
+  line-height: 1.5;
+  margin: 8px 0 0;
+}
+
+.provider-hint.error {
+  color: var(--warn-red);
+}
+
+.provider-hint strong {
+  color: var(--white-85);
+  font-weight: 600;
+}
+
+.provider-register-btn {
+  margin-top: 12px;
+  width: 100%;
+  background: var(--solana-green);
+  color: #000;
+  border: none;
+  padding: 10px 14px;
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  cursor: pointer;
+  transition: 120ms ease;
+  box-shadow: 0 0 20px -8px rgba(20, 241, 149, 0.6);
+}
+
+.provider-register-btn:hover {
+  transform: translateY(-1px);
+}
+
+.provider-register-btn:disabled {
+  background: rgba(20, 241, 149, 0.3);
+  color: rgba(0, 0, 0, 0.5);
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
 /* ── Log panel ─────────────────────────────────────────────────────── */
 
 .log-panel {

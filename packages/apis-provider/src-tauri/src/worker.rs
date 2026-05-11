@@ -195,3 +195,83 @@ fn now_ms() -> u64 {
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
 }
+
+// ── Provider derive / register ─────────────────────────────────────
+//
+// These are one-shot subprocess invocations against the existing
+// Python `apis_worker` package — they're decoupled from the long-
+// running worker process in `start_worker` above.
+
+#[derive(Debug, Serialize)]
+pub struct DerivedProvider {
+    pub authority: String,
+    pub pda: String,
+}
+
+/// Run `python -m apis_worker.derive <keypair_path>` and parse the
+/// two-line stdout (authority + PDA, both base58).
+#[tauri::command]
+pub async fn derive_provider_pda(
+    python_path: Option<String>,
+    working_dir: Option<String>,
+    keypair_path: String,
+) -> Result<DerivedProvider, String> {
+    let python = python_path.unwrap_or_else(|| "python3".to_string());
+    let mut cmd = Command::new(&python);
+    cmd.args(["-m", "apis_worker.derive", &keypair_path]);
+    if let Some(dir) = working_dir.as_ref() {
+        cmd.current_dir(dir);
+    }
+    let output = cmd
+        .output()
+        .await
+        .map_err(|e| format!("failed to run {}: {}", python, e))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("derive exited {:?}: {}", output.status.code(), stderr.trim()));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let lines: Vec<&str> = stdout.lines().collect();
+    if lines.len() < 2 {
+        return Err(format!("unexpected derive output: {:?}", stdout));
+    }
+    Ok(DerivedProvider {
+        authority: lines[0].trim().to_string(),
+        pda: lines[1].trim().to_string(),
+    })
+}
+
+/// Run `scripts/register_provider.py` to register the Provider PDA
+/// on-chain. Returns the registration tx signature on success.
+#[tauri::command]
+pub async fn register_provider_subprocess(
+    python_path: Option<String>,
+    working_dir: Option<String>,
+    keypair_path: String,
+) -> Result<String, String> {
+    let python = python_path.unwrap_or_else(|| "python3".to_string());
+    let mut cmd = Command::new(&python);
+    cmd.args(["scripts/register_provider.py"]);
+    cmd.env("APIS_WORKER_KEYPAIR", &keypair_path);
+    if let Some(dir) = working_dir.as_ref() {
+        cmd.current_dir(dir);
+    }
+    let output = cmd
+        .output()
+        .await
+        .map_err(|e| format!("failed to run {}: {}", python, e))?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if !output.status.success() {
+        return Err(format!(
+            "register exited {:?}\nstdout: {}\nstderr: {}",
+            output.status.code(),
+            stdout.trim(),
+            stderr.trim(),
+        ));
+    }
+    // The script prints success info; we don't strictly need the tx
+    // sig here, the on-chain Provider account becoming visible is the
+    // real signal. Return the trimmed stdout so the UI can show it.
+    Ok(stdout.trim().to_string())
+}
