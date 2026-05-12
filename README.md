@@ -459,7 +459,6 @@ IDL. No hand-rolled discriminators on the web side.
 
 Anchor 1.0's IDL format isn't supported by `anchorpy` 0.21 yet, so the
 worker uses static borsh layouts + IDL-derived discriminators directly.
-Documented in `MEMORY.md`.
 
 ### Desktop provider app (Rust + React, Tauri 2)
 
@@ -478,9 +477,6 @@ fair-tier suggested price (`APIS_PROVIDER_CHIP`,
 `APIS_PROVIDER_RAM_GB`, `APIS_PROVIDER_CPU_CORES`,
 `APIS_BENCHMARK_SECONDS_PER_IMAGE`, `APIS_SUGGESTED_PRICE_USDC_BASE`).
 The worker bakes those into every signed heartbeat. macOS-only at v0.3.
-Cross-platform support is queued for Phase 2 (Tauri builds Win/Linux
-natively; the bottleneck is Flux Schnell's CUDA path for non-Mac
-providers).
 
 ### MCP server (TypeScript, Express)
 
@@ -515,8 +511,7 @@ The agent has two operational modes:
   server reachable.
 - **MCP + x402** (`--mcp <url>` or `APIS_MCP_URL` env): the agent
   signs only one Solana tx — the SPL USDC transfer to the MCP
-  server's ATA. The server signs everything on-chain. This is the
-  "agents-as-buyers" demo path.
+  server's ATA. The server signs everything on-chain. 
 
 ### Solana CLI tooling
 
@@ -597,11 +592,11 @@ Apis/
 │   │       ├── lib/benchmark.ts              # detectHardware + runBenchmark
 │   │       └── components/Onboarding.tsx     # first-launch 3-step wizard
 │   │
-│   ├── mcp/                 # MCP server (F4 agent rail)
+│   ├── mcp/                 # MCP server 
 │   │   ├── src/
 │   │   │   ├── index.ts                     # Express + StreamableHTTPServerTransport
 │   │   │   ├── server.ts                    # McpServer + 4 tool registrations
-│   │   │   ├── generated/apis-program/      # Codama-generated client (copied)
+│   │   │   ├── generated/apis-program/      # Codama-generated client 
 │   │   │   └── lib/
 │   │   │       ├── rpc.ts                   # constants + RPC + USDC formatter
 │   │   │       ├── network.ts               # fetchProviders + heartbeats
@@ -611,7 +606,7 @@ Apis/
 │   │   │       └── payment.ts               # x402 self-roll verifier
 │   │   └── README.md                        # tool surface + curl tests
 │   │
-│   └── agent/               # Atlas-7 autonomous Claude buyer (F4 demo)
+│   └── agent/               # Atlas-7 autonomous Claude buyer 
 │       ├── src/
 │       │   ├── index.ts                     # CLI: direct-Solana or --mcp mode
 │       │   ├── generated/apis-program/      # Codama-generated client (copied)
@@ -838,82 +833,10 @@ See `packages/agent/README.md` for the agent's internals.
 
 ---
 
-## Scope: what's in, what's out
-
-Honest accounting for the hackathon submission.
-
-**In.**
-
-- Permissionless provider registration (no whitelist, no KYC, anyone with
-  a Solana wallet + ~0.05 SOL devnet can register).
-- Real escrow lifecycle on devnet — `create_job` locks USDC, `accept_job`
-  / `submit_completion` move state, `confirm_completion` pays out
-  provider + treasury and closes accounts (rent refunded).
-- Real inference workload — Flux Schnell on Apple Silicon via MLX, with
-  cryptographic spec/result hashing so the on-chain `proof_hash` actually
-  binds to the buyer's prompt + the worker's output bytes.
-- IPFS pinning for results (Pinata v3 API).
-- Buyer cancel path with deadline countdown UI.
-- Signed liveness heartbeats end-to-end (worker Ed25519-signs, web
-  verifies + matches on-chain `Provider.authority`).
-- 20/20 bankrun tests on the program (≥1 happy + ≥1 malicious-input
-  per instruction).
-- 7-route web app with Phantom integration + test USDC faucet.
-- Tauri desktop app (macOS) for providers.
-- **MCP server + x402 paywall** with 4 tools over Streamable HTTP.
-  Agent pays via SPL transfer + memo, server self-verifies on chain
-  (no external facilitator dependency), then signs `create_job` +
-  `confirm_completion` on the agent's behalf.
-- **Atlas-7 autonomous agent CLI** (Claude Sonnet 4.5) that runs the
-  full purchase loop end-to-end. Two modes — direct Solana (default)
-  or `--mcp` (the F4 demo path).
-
-**Out (and why).**
-
-- **Fly.io deploy of the MCP server** — server is local-only at
-  v0.4.0. The hot wallet env-var path is already in place
-  (`APIS_MCP_SERVER_KEYPAIR_JSON`), so `fly launch + fly secrets set`
-  finishes the deploy. Queued for v0.4.1.
-- **Coinbase x402 facilitator** — the server self-verifies SPL
-  transfers on chain directly (same security shape, no external dep).
-  Coinbase facilitator integration adds standards compliance + cross-
-  service interop; Phase 2 polish.
-- **Multi-GPU pooling (F5)** — dropped permanently. One worker process
-  per Mac, with `capacity` reserved in the signed heartbeat for future
-  multi-GPU bumping.
-- **TEE / zkML verification** — out of scope per Research §4 (infeasible
-  on consumer GPUs in 2026). The MVP relies on layer-1 verification
-  (signatures + on-chain proof hash); spot-check + slashing logic is
-  the Sprint 5 deliverable, not in this submission.
-- **Mainnet** — devnet only. Test mint, no real-money exposure. Mainnet
-  is gated on a security audit (Phase 2).
-- **Auto-update / Stronghold-encrypted keypair / native notifications**
-  — desktop app polish queued for after Sprint 5 verification work.
-- **Code signing on the desktop bundle** — unsigned `.dmg` requires
-  Gatekeeper workaround (`xattr -d com.apple.quarantine …`). Real
-  signing needs an Apple Developer Program account, Phase 2.
-- **Server-side state persistence** — the MCP server keeps pending
-  quotes + pending jobs in an in-memory `Map`. A restart loses the
-  quote-store + pending-confirm queue. Production needs Redis or
-  similar. Acceptable for a single-instance hackathon deploy.
-
-**Known cosmetic bugs.**
-
-- Active/Total job counters on the desktop app's Provider PDA card
-  show u64 noise — off-by-N byte offset in the W2 Provider account
-  decoder, doesn't affect the on-chain flow. Fix queued for Sprint 5.
-- Heartbeat lookup latency is ~700ms–1s per PDA (Pinata roundtrip),
-  so `/network` and `/stats` initial load takes ~5s. Mitigated with
-  HexSwarm loading states. Real fix is a batched
-  `/api/heartbeats?pdas=…` endpoint — queued.
-
----
-
 ## License
 
 MIT. See individual `Cargo.toml` / `package.json` for sub-package
 licenses (all permissive: MIT / Apache-2.0). Flux Schnell is Apache-2.0;
 Anchor is Apache-2.0; Pinata SDKs are MIT.
 
-Built for the **Dev3pack Solana track** hackathon.
 Devnet only.
