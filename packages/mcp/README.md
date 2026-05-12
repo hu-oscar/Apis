@@ -91,8 +91,8 @@ The deploy must set:
 
 ## What's next
 
-- **Sprint 4.4** — x402 paywall middleware on `submit_job`. First call returns HTTP 402 with payment requirements; agent retries with `X-Payment: <SPL-transfer-signature>`; server validates before executing the real on-chain create_job.
-- **Sprint 4.5** — Coinbase x402 facilitator integration (with self-rolled verifier as fallback).
-- **Sprint 4.6** — auto-`confirm_completion` already lives in `get_status`; will be hardened in 4.6 with retries + error reporting.
-- **Sprint 4.7** — rewire Atlas-7 (the agent CLI) to use these MCP tools instead of direct Solana.
-- **Sprint 4.8** — Fly.io deploy + demo recording + v0.4.0 tag.
+- x402 paywall middleware on `submit_job`. First call returns HTTP 402 with payment requirements; agent retries with `X-Payment: <SPL-transfer-signature>`; server validates before executing the real on-chain create_job.
+- Coinbase x402 facilitator integration (with self-rolled verifier as fallback).
+- auto-`confirm_completion` already lives in `get_status`; will be hardened in 4.6 with retries + error reporting.
+- rewire Atlas-7 (the agent CLI) to use these MCP tools instead of direct Solana.
+- Fly.io deploy 
