@@ -21,10 +21,6 @@ Four surfaces, one program:
 - **Atlas-7 autonomous agent** — Claude Sonnet 4.5 in a tool-use loop,
   reads the live network, picks a provider, refines the prompt, pays
   via x402, downloads the result. Zero human in the loop.
-
-> Submitted to **Dev3pack hackathon — Solana track ($10k pool)** ·
-> tagged **v0.4.0** (Phase 1.5 — MCP + x402 + autonomous agent).
-
 ---
 
 ## Live demo + on-chain addresses
