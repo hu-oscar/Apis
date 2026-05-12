@@ -74,7 +74,7 @@ The CLI validates:
 
 If anything fails validation, `decideDeterministic()` falls back to picking the fastest in-budget provider with the raw user task as the prompt.
 
-## What's next (Sprint 4.1–4.8)
+## What's next 
 
 This is the direct-Solana version of the agent. The full MCP + x402 plan is:
 
@@ -82,4 +82,4 @@ This is the direct-Solana version of the agent. The full MCP + x402 plan is:
 2. **x402 paywall** on `submit_job`: first call → HTTP 402 with payment requirements; agent retries with `X-Payment` header carrying an SPL USDC transfer signature; server verifies via the Coinbase facilitator (or a self-rolled verifier) before executing the actual on-chain `create_job` from its hot wallet.
 3. **Atlas-7 rewired** to use the MCP tools instead of direct Solana — same Claude, same flow, but now through the protocol layer that any MCP-compatible agent (Claude Desktop, ElizaOS, agent frameworks) can plug into.
 
-See top-level `MEMORY.md` for the full sprint log.
+
