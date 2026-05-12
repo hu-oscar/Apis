@@ -619,11 +619,7 @@ function Footer() {
           >
             github
           </a>
-          <span className="text-white/40">built for dev3pack</span>
         </div>
-        <p className="font-mono text-xs text-white/30">
-          phase 1 · hackathon mvp · devnet only · no real-money exposure
-        </p>
       </div>
       <div className="mt-3 flex flex-wrap gap-x-3 gap-y-1 font-mono text-[10px] uppercase tracking-wider text-white/25">
         <span>anchor 1.0</span>
