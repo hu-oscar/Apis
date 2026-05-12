@@ -59,3 +59,22 @@
     color-scheme: light dark;
   }
 }
+
+/* Aceternity-style spotlight entrance — used by the agent section on
+ * the landing page. SVG starts at opacity 0 + slightly translated +
+ * scaled-down; animation slides into final position over 2s with a
+ * 0.75s lead-in delay. Runs once, holds the final state via `forwards`. */
+@keyframes spotlight {
+  0% {
+    opacity: 0;
+    transform: translate(-72%, -62%) scale(0.5);
+  }
+  100% {
+    opacity: 1;
+    transform: translate(-50%, -40%) scale(1);
+  }
+}
+
+.animate-spotlight {
+  animation: spotlight 2s ease 0.75s 1 forwards;
+}

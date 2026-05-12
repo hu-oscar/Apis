@@ -30,6 +30,7 @@ import { AnomalousMatterHero } from "@/app/components/ui/anomalous-matter-hero";
 import { NavBar } from "@/app/components/ui/navbar";
 import { Globe } from "@/app/components/ui/cobe-globe";
 import { MarketplaceFlow } from "@/app/components/marketplace-flow";
+import { AgentSection } from "@/app/components/agent-section";
 
 type LiveStats = {
   providerCount: number;
@@ -210,6 +211,8 @@ export default function Home() {
 
       <div className="relative z-10 mx-auto max-w-5xl px-6">
         <MarketplaceFlow />
+
+        <AgentSection />
 
         <WhyApis />
 
