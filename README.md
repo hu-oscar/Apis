@@ -91,8 +91,7 @@ provider's profile with chip / RAM / Flux speed / suggested price.
 
 ### **B. Autonomous agent flow** (Atlas-7 = Claude buying compute on its own)
 
-Local-only at v0.4.0 — MCP server hosting on Fly.io is the v0.4.1
-deliverable. Until then, three terminals:
+Local-only, three terminals:
 
 ```bash
 # Terminal 1 — MCP server (binds to localhost:3030)
@@ -119,16 +118,6 @@ payment).
 
 ---
 
-## What ships in this submission
-
-| Feature (PRD ref) | Status | Notes |
-|---|---|---|
-| **F1** — Provider desktop app (Tauri) | ✅ | macOS-only. System tray, signed heartbeats, real earnings dashboard, GPU contention auto-pause, hardware detection + Flux benchmark, suggested $/job price. |
-| **F2** — Buyer web app (Next.js) | ✅ | 7 routes (landing, /network, /provider/[pda], /submit, /job/[id], /stats, /history), live on-chain reads, Phantom-signed buyer flow, cancel & refund, branded 404/error/loading chrome, mobile-responsive. |
-| **F3** — On-chain escrow program (Anchor) | ✅ | 7 instructions, full lifecycle, 20 bankrun tests (≥1 happy + ≥1 malicious-input per instruction). Deployed to devnet at `2qe8YXc…SiH868mhf`. |
-| **F4** — MCP + x402 agent rails | ✅ | Real MCP server with 4 tools (`list_providers`, `quote_inference`, `submit_job`, `get_status`) over Streamable HTTP. x402-flavored paywall on `submit_job` — agent pays USDC via SPL transfer + memo, server verifies on chain then signs `create_job` on the agent's behalf. Atlas-7 CLI = Claude Sonnet 4.5 driving the whole loop autonomously. Local-only at v0.4.0; Fly.io deploy queued for v0.4.1. |
-| **F5** — Multi-GPU pooling | ❌ | **Permanently dropped** — single-GPU per provider, with `capacity` in heartbeat reserved for future bumping. |
-
 **Two cryptographic primitives tie the four surfaces together:**
 
 - **Signed liveness heartbeats** — worker Ed25519-signs every
@@ -150,7 +139,7 @@ payment).
 
 ---
 
-## What is this?
+## What is Apis?
 
 Centralized AI cloud (Replicate, Fal, vendor X) gives you compute, but you
 trade off:
